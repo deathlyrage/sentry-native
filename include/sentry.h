@@ -24,7 +24,7 @@ extern "C" {
 
 /* SDK Version */
 #define SENTRY_SDK_NAME "sentry.native"
-#define SENTRY_SDK_VERSION "0.4.6"
+#define SENTRY_SDK_VERSION "0.4.7"
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
 /* common platform detection */
@@ -749,6 +749,20 @@ SENTRY_API void sentry_options_set_debug(sentry_options_t *opts, int debug);
  * Returns the current value of the debug flag.
  */
 SENTRY_API int sentry_options_get_debug(const sentry_options_t *opts);
+
+/**
+ * Sets the number of breadcrumbs being tracked and attached to events.
+ *
+ * Defaults to 100.
+ */
+SENTRY_API void sentry_options_set_max_breadcrumbs(
+    sentry_options_t *opts, size_t max_breadcrumbs);
+
+/**
+ * Sets the number of breadcrumbs being tracked and attached to events.
+ */
+SENTRY_API size_t sentry_options_get_max_breadcrumbs(
+    const sentry_options_t *opts);
 
 /**
  * Type of the callback for logger function.
