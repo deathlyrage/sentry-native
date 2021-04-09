@@ -22,6 +22,7 @@ add_executable(sentry_test_unit
 	test_consent.c
 	test_envelopes.c
 	test_failures.c
+	test_fuzzfailures.c
 	test_logger.c
 	test_modulefinder.c
 	test_mpack.c
@@ -81,3 +82,24 @@ target_compile_definitions(sentry PRIVATE SIZEOF_LONG=${CMAKE_SIZEOF_LONG})
 target_compile_definitions(sentry_test_unit PRIVATE SENTRY_UNITTEST)
 
 add_test(NAME sentry_test_unit COMMAND sentry_test_unit)
+
+add_executable(sentry_fuzz_json
+	${SENTRY_SOURCES}
+	fuzz.c
+)
+target_compile_definitions(sentry_fuzz_json PRIVATE ${SENTRY_COMPILE_DEFINITIONS})
+target_include_directories(sentry_fuzz_json PRIVATE
+	${SENTRY_INTERFACE_INCLUDE_DIRECTORIES}
+	${SENTRY_INCLUDE_DIRECTORIES}
+)
+target_link_libraries(sentry_fuzz_json PRIVATE
+	${SENTRY_LINK_LIBRARIES}
+	${SENTRY_INTERFACE_LINK_LIBRARIES}
+	"$<$<PLATFORM_ID:Linux>:rt>"
+)
+
+if(MSVC)
+	target_compile_options(sentry_fuzz_json PRIVATE $<BUILD_INTERFACE:/wd5105>)
+endif()
+
+add_test(NAME sentry_fuzz_json COMMAND sentry_fuzz_json)
