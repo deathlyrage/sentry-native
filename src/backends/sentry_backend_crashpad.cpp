@@ -65,7 +65,8 @@ sentry__crashpad_backend_user_consent_changed(sentry_backend_t *backend)
 }
 
 static void
-sentry__crashpad_backend_flush_scope(sentry_backend_t *backend)
+sentry__crashpad_backend_flush_scope(
+    sentry_backend_t *backend, const sentry_options_t *options)
 {
     const crashpad_state_t *data = (crashpad_state_t *)backend->data;
     if (!data->event_path) {
@@ -78,7 +79,7 @@ sentry__crashpad_backend_flush_scope(sentry_backend_t *backend)
     sentry_value_t event = sentry_value_new_object();
     SENTRY_WITH_SCOPE (scope) {
         // we want the scope without any modules or breadcrumbs
-        sentry__scope_apply_to_event(scope, event, SENTRY_SCOPE_NONE);
+        sentry__scope_apply_to_event(scope, options, event, SENTRY_SCOPE_NONE);
     }
 
     size_t mpack_size;
@@ -113,6 +114,14 @@ sentry__crashpad_handler(int UNUSED(signum), siginfo_t *UNUSED(info),
 
     SENTRY_WITH_OPTIONS (options) {
         sentry__write_crash_marker(options);
+
+        sentry_value_t event = sentry_value_new_event();
+        if (options->before_send_func) {
+            SENTRY_TRACE("invoking `before_send` hook");
+            event = options->before_send_func(
+                event, NULL, options->before_send_data);
+        }
+        sentry_value_decref(event);
 
         sentry__record_errors_on_current_session(1);
         sentry_session_t *session = sentry__end_current_session_with_status(

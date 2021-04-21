@@ -22,7 +22,7 @@ from .assertions import (
 pytestmark = pytest.mark.skipif(not has_http, reason="tests need http")
 
 auth_header = (
-    "Sentry sentry_key=uiaeosnrtdy, sentry_version=7, sentry_client=sentry.native/0.4.8"
+    "Sentry sentry_key=uiaeosnrtdy, sentry_version=7, sentry_client=sentry.native/0.4.9"
 )
 
 
@@ -119,7 +119,7 @@ def test_exception_and_session_http(cmake, httpserver):
     run(
         tmp_path,
         "sentry_example",
-        ["log", "start-session", "capture-exception"],
+        ["log", "start-session", "capture-exception", "add-stacktrace"],
         check=True,
         env=env,
     )
@@ -129,6 +129,7 @@ def test_exception_and_session_http(cmake, httpserver):
     envelope = Envelope.deserialize(output)
 
     assert_exception(envelope)
+    assert_stacktrace(envelope, inside_exception=True)
     assert_session(envelope, {"init": True, "status": "ok", "errors": 1})
 
     output = httpserver.log[1][0].get_data()
