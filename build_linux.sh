@@ -32,9 +32,9 @@ cmake -B "build" \
 	-DSENTRY_BACKEND=crashpad \
 	-DSENTRY_TRANSPORT=none \
 	-DBUILD_SHARED_LIBS=ON \
-	-DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH" \
 	-DCRASHPAD_ZLIB_SYSTEM=OFF
-	
+
+#	-DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH" \
 #-DCMAKE_TOOLCHAIN_FILE="$UE_TOOLCHAIN_PATH/cmake/UE4Toolchain.cmake"
 
 # Build and install sentry-native
