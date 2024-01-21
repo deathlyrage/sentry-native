@@ -6,25 +6,25 @@ TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="unreal_toolchain"
 
 # Download the Unreal Engine Linux Toolchain if it's not already present
-if [ ! -d "$TOOLCHAIN_DIR" ]; then
-	echo "Downloading Unreal Engine Linux Toolchain..."
-	wget "$TOOLCHAIN_URL"
-
-	echo "Extracting Toolchain..."
-	mkdir "$TOOLCHAIN_DIR"
-	tar -xzvf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
-	rm "$TOOLCHAIN_ARCHIVE"
-fi
+#if [ ! -d "$TOOLCHAIN_DIR" ]; then
+#	echo "Downloading Unreal Engine Linux Toolchain..."
+#	wget "$TOOLCHAIN_URL"
+#
+#	echo "Extracting Toolchain..."
+#	mkdir "$TOOLCHAIN_DIR"
+#	tar -xzvf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
+#	rm "$TOOLCHAIN_ARCHIVE"
+#fi
 
 # Set the path to the extracted toolchain
-UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/$TOOLCHAIN_VER/x86_64-unknown-linux-gnu"
+#UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/$TOOLCHAIN_VER/x86_64-unknown-linux-gnu"
 
 rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
-export CC="$UE_TOOLCHAIN_PATH/bin/clang"
-export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
+#export CC="$UE_TOOLCHAIN_PATH/bin/clang"
+#export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
 
 # Configure sentry-native with Unreal's toolchain
 cmake -B "build" \
