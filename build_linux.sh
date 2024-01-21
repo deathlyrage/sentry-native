@@ -29,7 +29,7 @@ export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
 # Configure sentry-native with Unreal's toolchain
 cmake -B "build" \
 	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-	-DSENTRY_BACKEND=breakpad \
+	-DSENTRY_BACKEND=crashpad \
 	-DSENTRY_TRANSPORT=none \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH"
