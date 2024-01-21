@@ -1,6 +1,6 @@
 #!/bin/bash
 # Toolchain download information
-TOOLCHAIN_VER="v20_clang-13.0.1-centos7"
+TOOLCHAIN_VER="v22_clang-16.0.6-centos7"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="unreal_toolchain"
