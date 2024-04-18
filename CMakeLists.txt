@@ -8,6 +8,8 @@ else()
 	cmake_minimum_required (VERSION 3.10)
 endif()
 
+add_definitions(-w)
+
 #read sentry-native version
 file(READ "include/sentry.h" _SENTRY_HEADER_CONTENT)
 string(REGEX MATCH "#define SENTRY_SDK_VERSION \"([0-9\.]+)\"" _SENTRY_VERSION_MATCH "${_SENTRY_HEADER_CONTENT}")
