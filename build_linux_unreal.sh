@@ -33,6 +33,9 @@ cmake -B "build" \
 	-DSENTRY_TRANSPORT=none \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCRASHPAD_ZLIB_SYSTEM=OFF \
+    -DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so \
+    -DCURL_LIBRARY=/usr/lib/x86_64-linux-gnu/libcurl.so \
+    -DCURL_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/curl \
 	-DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH"
 
 #-DCMAKE_TOOLCHAIN_FILE="$UE_TOOLCHAIN_PATH/cmake/UE4Toolchain.cmake"
