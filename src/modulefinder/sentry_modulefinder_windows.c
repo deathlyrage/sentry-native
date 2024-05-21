@@ -91,6 +91,7 @@ extract_pdb_info(uintptr_t module_addr, sentry_value_t module)
 static void
 load_modules(void)
 {
+#if !defined(_GAMING_XBOX_XBOXONE) && !defined(_GAMING_XBOX_SCARLETT)
     HANDLE snapshot
         = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
     MODULEENTRY32W module = { 0 };
@@ -126,6 +127,7 @@ load_modules(void)
     CloseHandle(snapshot);
 
     sentry_value_freeze(g_modules);
+#endif
 }
 
 sentry_value_t

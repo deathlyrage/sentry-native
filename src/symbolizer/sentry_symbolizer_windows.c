@@ -6,12 +6,20 @@
 #include <dbghelp.h>
 #include <malloc.h>
 
+#if defined(_GAMING_XBOX_XBOXONE) || defined(_GAMING_XBOX_SCARLETT)
+	#pragma comment(lib, "xgameplatform.lib")
+	#pragma comment(lib, "xmem.lib")
+	#include <psapi.h>
+	#include <xmem.h>
+#endif
+
 #define MAX_SYM 1024
 
 bool
 sentry__symbolize(
     void *addr, void (*func)(const sentry_frame_info_t *, void *), void *data)
 {
+#if !defined(_GAMING_XBOX_XBOXONE) && !defined(_GAMING_XBOX_SCARLETT)
     HANDLE proc = sentry__init_dbghelp();
 
     SYMBOL_INFO *sym = (SYMBOL_INFO *)_alloca(sizeof(SYMBOL_INFO) + MAX_SYM);
@@ -37,4 +45,7 @@ sentry__symbolize(
     func(&frame_info, data);
 
     return true;
+#else
+	return false;
+#endif
 }
