@@ -55,6 +55,8 @@ sentry__get_kernel_version(windows_version_t *win_ver)
 int
 sentry__get_windows_version(windows_version_t *win_ver)
 {
+#if !defined(_GAMING_XBOX_XBOXONE) && !defined(_GAMING_XBOX_SCARLETT)
+	
     // The `CurrentMajorVersionNumber`, `CurrentMinorVersionNumber` and `UBR`
     // are DWORD, while `CurrentBuild` is a SZ (text).
     uint32_t reg_version = 0;
@@ -92,7 +94,7 @@ sentry__get_windows_version(windows_version_t *win_ver)
         return 0;
     }
     win_ver->ubr = reg_version;
-
+#endif
     return 1;
 }
 

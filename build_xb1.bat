@@ -13,7 +13,7 @@ cmake --version
 
 SET BUILD_TYPE="RelWithDebInfo"
 
-cmake -B build -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DSENTRY_BACKEND=none -DSENTRY_TRANSPORT=none -DCMAKE_GENERATOR_PLATFORM=Gaming.Xbox.XboxOne.x64 -DBUILD_SHARED_LIBS=ON -DCMAKE_SYSTEM_VERSION=11
+cmake -B build -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DSENTRY_BACKEND=none -DSENTRY_TRANSPORT=none -DCMAKE_GENERATOR_PLATFORM=Gaming.Xbox.XboxOne.x64 -DBUILD_SHARED_LIBS=ON -DCMAKE_SYSTEM_VERSION=10
 cmake --build build --parallel --config %BUILD_TYPE%
 cmake --install build --prefix install --config %BUILD_TYPE%
 
