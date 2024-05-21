@@ -7,8 +7,8 @@
 #include <malloc.h>
 
 #if defined(_GAMING_XBOX_XBOXONE) || defined(_GAMING_XBOX_SCARLETT)
-	#pragma comment(lib, "xgameplatform.lib")
-	#pragma comment(lib, "xmem.lib")
+	//#pragma comment(lib, "xgameplatform.lib")
+	//#pragma comment(lib, "xmem.lib")
 	#include <psapi.h>
 	#include <xmem.h>
 #endif

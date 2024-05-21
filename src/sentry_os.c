@@ -2,7 +2,52 @@
 #include "sentry_string.h"
 #include "sentry_utils.h"
 
-#ifdef SENTRY_PLATFORM_WINDOWS
+#if defined(_GAMING_XBOX_XBOXONE) || defined(_GAMING_XBOX_SCARLETT)
+
+sentry_value_t
+sentry__get_os_context(void)
+{
+    const sentry_value_t os = sentry_value_new_object();
+    if (sentry_value_is_null(os)) {
+        return os;
+    }
+    sentry_value_set_by_key(os, "name", sentry_value_new_string("Xbox"));
+
+/*
+    bool at_least_one_key_successful = false;
+    char buf[32];
+    windows_version_t win_ver;
+    if (sentry__get_kernel_version(&win_ver)) {
+        at_least_one_key_successful = true;
+
+        snprintf(buf, sizeof(buf), "%u.%u.%u.%lu", win_ver.major, win_ver.minor,
+            win_ver.build, win_ver.ubr);
+        sentry_value_set_by_key(
+            os, "kernel_version", sentry_value_new_string(buf));
+    }
+
+    if (sentry__get_windows_version(&win_ver)) {
+        at_least_one_key_successful = true;
+
+        snprintf(buf, sizeof(buf), "%u.%u.%u", win_ver.major, win_ver.minor,
+            win_ver.build);
+        sentry_value_set_by_key(os, "version", sentry_value_new_string(buf));
+
+        snprintf(buf, sizeof(buf), "%lu", win_ver.ubr);
+        sentry_value_set_by_key(os, "build", sentry_value_new_string(buf));
+    }
+
+    if (at_least_one_key_successful) {
+        sentry_value_freeze(os);
+        return os;
+    }
+*/
+
+    sentry_value_decref(os);
+    return sentry_value_new_null();
+}
+
+#elif SENTRY_PLATFORM_WINDOWS
 
 #    include <winver.h>
 #    define CURRENT_VERSION "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
@@ -55,8 +100,6 @@ sentry__get_kernel_version(windows_version_t *win_ver)
 int
 sentry__get_windows_version(windows_version_t *win_ver)
 {
-#if !defined(_GAMING_XBOX_XBOXONE) && !defined(_GAMING_XBOX_SCARLETT)
-	
     // The `CurrentMajorVersionNumber`, `CurrentMinorVersionNumber` and `UBR`
     // are DWORD, while `CurrentBuild` is a SZ (text).
     uint32_t reg_version = 0;
@@ -94,7 +137,7 @@ sentry__get_windows_version(windows_version_t *win_ver)
         return 0;
     }
     win_ver->ubr = reg_version;
-#endif
+
     return 1;
 }
 
