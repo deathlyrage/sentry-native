@@ -19,5 +19,3 @@ cmake --build build --parallel --config %BUILD_TYPE%
 cmake --install build --prefix install --config %BUILD_TYPE%
 
 REM "C:\\Program Files\\7-Zip\\7z.exe" a Sentry-Native-XSX "./install/*"
-
-pause
