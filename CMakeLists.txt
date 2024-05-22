@@ -441,9 +441,10 @@ if(SENTRY_BACKEND_CRASHPAD)
 	endif()
 	add_subdirectory(external/crashpad crashpad_build)
 
-	if(WIN32)
-		add_dependencies(sentry crashpad::wer)
-	endif()
+	# Disable WER
+	#if(WIN32)
+		#add_dependencies(sentry crashpad::wer)
+	#endif()
 
 	# set static runtime if enabled
 	if(SENTRY_BUILD_RUNTIMESTATIC AND MSVC)
@@ -456,7 +457,7 @@ if(SENTRY_BACKEND_CRASHPAD)
 		set_property(TARGET crashpad_snapshot PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 		set_property(TARGET crashpad_tools PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 		set_property(TARGET crashpad_util PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-		set_property(TARGET crashpad_wer PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+		#set_property(TARGET crashpad_wer PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 		set_property(TARGET crashpad_zlib PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 		set_property(TARGET mini_chromium PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	endif()
@@ -473,7 +474,7 @@ if(SENTRY_BACKEND_CRASHPAD)
 		set_target_properties(crashpad_util PROPERTIES FOLDER ${SENTRY_FOLDER})
 		set_target_properties(crashpad_zlib PROPERTIES FOLDER ${SENTRY_FOLDER})
 		set_target_properties(mini_chromium PROPERTIES FOLDER ${SENTRY_FOLDER})
-		set_target_properties(crashpad_wer PROPERTIES FOLDER ${SENTRY_FOLDER})
+		#set_target_properties(crashpad_wer PROPERTIES FOLDER ${SENTRY_FOLDER})
 	endif()
 
 	target_link_libraries(sentry PRIVATE
@@ -486,8 +487,8 @@ if(SENTRY_BACKEND_CRASHPAD)
 	if(WIN32 AND MSVC)
 		sentry_install(FILES $<TARGET_PDB_FILE:crashpad_handler>
 			DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
-		sentry_install(FILES $<TARGET_PDB_FILE:crashpad_wer>
-			DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+		#sentry_install(FILES $<TARGET_PDB_FILE:crashpad_wer>
+		#	DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
 	endif()
 	add_dependencies(sentry crashpad::handler)
 elseif(SENTRY_BACKEND_BREAKPAD)
