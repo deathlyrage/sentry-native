@@ -11,4 +11,6 @@ cmake -B build -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DSENTRY_BACKEND=crashpad -DCMAKE
 cmake --build build --parallel --config %BUILD_TYPE%
 cmake --install build --prefix install --config %BUILD_TYPE%
 
-"C:\\Program Files\\7-Zip\\7z.exe" a Sentry-Native-Win64 "./install/*"
+REM "C:\\Program Files\\7-Zip\\7z.exe" a Sentry-Native-Win64 "./install/*"
+
+pause

@@ -47,7 +47,7 @@ sentry__get_os_context(void)
     return sentry_value_new_null();
 }
 
-#elif SENTRY_PLATFORM_WINDOWS
+#elif defined(SENTRY_PLATFORM_WINDOWS)
 
 #    include <winver.h>
 #    define CURRENT_VERSION "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
