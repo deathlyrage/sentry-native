@@ -76,6 +76,7 @@ option(SENTRY_BUILD_EXAMPLES "Build sentry-native example(s)" "${SENTRY_MAIN_PRO
 
 option(SENTRY_LINK_PTHREAD "Link platform threads library" ON)
 if(SENTRY_LINK_PTHREAD)
+	set(THREADS_PREFER_PTHREAD_FLAG ON)
 	find_package(Threads REQUIRED)
 endif()
 
@@ -290,7 +291,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "OS400")
 endif()
 
 if(SENTRY_TRANSPORT_CURL)
-	if(NOT CURL_FOUND) # Some other lib might bring libcurl already
+	if(NOT TARGET CURL::libcurl) # Some other lib might bring libcurl already
 		find_package(CURL REQUIRED COMPONENTS AsynchDNS)
 	endif()
 
@@ -298,7 +299,7 @@ if(SENTRY_TRANSPORT_CURL)
 endif()
 
 if(SENTRY_TRANSPORT_COMPRESSION)
-	if(NOT ZLIB_FOUND)
+	if(NOT TARGET ZLIB::ZLIB)
 		find_package(ZLIB REQUIRED)
 	endif()
 
@@ -403,11 +404,7 @@ if(SENTRY_LINK_PTHREAD)
 endif()
 
 # apply platform libraries to sentry library
-if(SENTRY_LIBRARY_TYPE STREQUAL "STATIC")
-	target_link_libraries(sentry PUBLIC ${_SENTRY_PLATFORM_LIBS})
-else()
-	target_link_libraries(sentry PRIVATE ${_SENTRY_PLATFORM_LIBS})
-endif()
+target_link_libraries(sentry PRIVATE ${_SENTRY_PLATFORM_LIBS})
 
 # suppress some errors and warnings for MinGW target
 if(MINGW)
@@ -583,10 +580,14 @@ if(SENTRY_BUILD_EXAMPLES)
 	target_link_libraries(sentry_example PRIVATE sentry)
 
 	if(MSVC)
-		target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:/wd5105>)
+		target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:/wd5105 /wd4717>)
 
 		# to test handling SEH by-passing exceptions we need to enable the control flow guard
 		target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:/guard:cf>)
+	else()
+		# Disable all optimizations for the `sentry_example` in gcc/clang. This allows us to keep crash triggers simple.
+		# The effects besides reproducible code-gen across compiler versions, will be negligible for build- and runtime.
+		target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:-O0>)
 	endif()
 
 	# set static runtime if enabled
@@ -612,4 +613,9 @@ endif()
 if(SENTRY_BUILD_SHARED_LIBS)
 	target_link_libraries(sentry PRIVATE
 			"$<$<OR:$<PLATFORM_ID:Linux>,$<PLATFORM_ID:Android>>:-Wl,--build-id=sha1,--version-script=${PROJECT_SOURCE_DIR}/src/exports.map>")
+
+	# Support 16KB page sizes
+	target_link_libraries(sentry PRIVATE
+	    "$<$<PLATFORM_ID:Android>:-Wl,-z,max-page-size=16384>"
+	)
 endif()

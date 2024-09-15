@@ -869,7 +869,7 @@ sentry_transaction_start(
 
     sentry_value_set_by_key(tx, "start_timestamp",
         sentry__value_new_string_owned(
-            sentry__msec_time_to_iso8601(sentry__msec_time())));
+            sentry__usec_time_to_iso8601(sentry__usec_time())));
 
     sentry__transaction_context_free(opaque_tx_cxt);
     return sentry__transaction_new(tx);
@@ -914,7 +914,7 @@ sentry_transaction_finish(sentry_transaction_t *opaque_tx)
     sentry_value_set_by_key(tx, "type", sentry_value_new_string("transaction"));
     sentry_value_set_by_key(tx, "timestamp",
         sentry__value_new_string_owned(
-            sentry__msec_time_to_iso8601(sentry__msec_time())));
+            sentry__usec_time_to_iso8601(sentry__usec_time())));
     // TODO: This might not actually be necessary. Revisit after talking to
     // the relay team about this.
     sentry_value_set_by_key(tx, "level", sentry_value_new_string("info"));
@@ -1002,10 +1002,9 @@ sentry_span_t *
 sentry_transaction_start_child(sentry_transaction_t *opaque_parent,
     const char *operation, const char *description)
 {
-    const size_t operation_len = operation ? strlen(operation) : 0;
-    const size_t description_len = description ? strlen(description) : 0;
-    return sentry_transaction_start_child_n(
-        opaque_parent, operation, operation_len, description, description_len);
+    return sentry_transaction_start_child_n(opaque_parent, operation,
+        sentry__guarded_strlen(operation), description,
+        sentry__guarded_strlen(description));
 }
 
 sentry_span_t *
@@ -1040,10 +1039,9 @@ sentry_span_t *
 sentry_span_start_child(sentry_span_t *opaque_parent, const char *operation,
     const char *description)
 {
-    size_t operation_len = operation ? strlen(operation) : 0;
-    size_t description_len = description ? strlen(description) : 0;
-    return sentry_span_start_child_n(
-        opaque_parent, operation, operation_len, description, description_len);
+    return sentry_span_start_child_n(opaque_parent, operation,
+        sentry__guarded_strlen(operation), description,
+        sentry__guarded_strlen(description));
 }
 
 void
@@ -1111,7 +1109,7 @@ sentry_span_finish(sentry_span_t *opaque_span)
 
     sentry_value_set_by_key(span, "timestamp",
         sentry__value_new_string_owned(
-            sentry__msec_time_to_iso8601(sentry__msec_time())));
+            sentry__usec_time_to_iso8601(sentry__usec_time())));
     sentry_value_remove_by_key(span, "sampled");
 
     size_t max_spans = SENTRY_SPANS_MAX;

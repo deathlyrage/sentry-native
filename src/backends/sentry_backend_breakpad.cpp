@@ -7,6 +7,9 @@ extern "C" {
 #include "sentry_database.h"
 #include "sentry_envelope.h"
 #include "sentry_options.h"
+#ifdef SENTRY_PLATFORM_WINDOWS
+#    include "sentry_os.h"
+#endif
 #include "sentry_path.h"
 #include "sentry_string.h"
 #include "sentry_sync.h"
@@ -176,9 +179,8 @@ sentry__breakpad_backend_callback(
 static bool
 IsDebuggerActive()
 {
-    int junk;
     int mib[4];
-    struct kinfo_proc info;
+    kinfo_proc info;
     size_t size;
 
     // Initialize the flags so that, if sysctl fails for some bizarre
@@ -194,7 +196,8 @@ IsDebuggerActive()
 
     // Call sysctl.
     size = sizeof(info);
-    junk = sysctl(mib, sizeof(mib) / sizeof(*mib), &info, &size, NULL, 0);
+    [[maybe_unused]] const int junk
+        = sysctl(mib, std::size(mib), &info, &size, nullptr, 0);
     assert(junk == 0);
 
     // We're being debugged if the P_TRACED flag is set.
@@ -209,6 +212,7 @@ sentry__breakpad_backend_startup(
     sentry_path_t *current_run_folder = options->run->run_path;
 
 #ifdef SENTRY_PLATFORM_WINDOWS
+    sentry__reserve_thread_stack();
     backend->data = new google_breakpad::ExceptionHandler(
         current_run_folder->path, NULL, sentry__breakpad_backend_callback, NULL,
         google_breakpad::ExceptionHandler::HANDLER_EXCEPTION);
