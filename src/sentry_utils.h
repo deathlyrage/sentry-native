@@ -8,10 +8,20 @@
 #    include <mach/mach.h>
 #endif
 #ifdef SENTRY_PLATFORM_WINDOWS
+#    include "sentry_os.h"
 #    include <winnt.h>
 #else
 #    include <sys/time.h>
 #    include <time.h>
+#endif
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#    define UNREACHABLE(reason) assert(!reason)
+#else
+#    define UNREACHABLE(reason) assert(!(bool)reason)
 #endif
 
 /**
@@ -31,8 +41,10 @@ typedef struct {
 /**
  * Parse the given `url` into the pre-allocated `url_out` parameter.
  * Returns 0 on success.
+ * `requires_path` flags whether the url needs a / after the host(:port) section
  */
-int sentry__url_parse(sentry_url_t *url_out, const char *url);
+int sentry__url_parse(
+    sentry_url_t *url_out, const char *url, bool requires_path);
 
 /**
  * This will free all the internal members of `url`, but not `url` itself, as
@@ -106,12 +118,7 @@ sentry__usec_time(void)
     // Contains a 64-bit value representing the number of 100-nanosecond
     // intervals since January 1, 1601 (UTC).
     FILETIME file_time;
-#    if _WIN32_WINNT >= 0x0602
-    GetSystemTimePreciseAsFileTime(&file_time);
-#    else
-    GetSystemTimeAsFileTime(&file_time);
-#    endif
-
+    sentry__get_system_time(&file_time);
     uint64_t timestamp = (uint64_t)file_time.dwLowDateTime
         + ((uint64_t)file_time.dwHighDateTime << 32);
     timestamp -= 116444736000000000LL; // convert to unix epoch
@@ -153,7 +160,8 @@ sentry__monotonic_time(void)
 
     LARGE_INTEGER qpc_counter;
     QueryPerformanceCounter(&qpc_counter);
-    return qpc_counter.QuadPart * 1000 / qpc_frequency.QuadPart;
+    return (uint64_t)qpc_counter.QuadPart * 1000
+        / (uint64_t)qpc_frequency.QuadPart;
 #elif defined(SENTRY_PLATFORM_DARWIN)
 
 // try `clock_gettime` first if available,

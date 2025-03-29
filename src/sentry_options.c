@@ -22,7 +22,13 @@ sentry_options_new(void)
     sentry_options_set_dsn(opts, getenv("SENTRY_DSN"));
     const char *debug = getenv("SENTRY_DEBUG");
     opts->debug = debug && sentry__string_eq(debug, "1");
-    sentry_logger_t logger = { sentry__logger_defaultlogger, NULL };
+#if !defined(NDEBUG)
+    if (!opts->debug && (!debug || !sentry__string_eq(debug, "0"))) {
+        opts->debug = 1;
+    }
+#endif
+    sentry_logger_t logger
+        = { sentry__logger_defaultlogger, NULL, SENTRY_LEVEL_DEBUG };
     opts->logger = logger;
     opts->transport_thread_name = sentry__string_clone("sentry-http");
 #ifdef SENTRY_PLATFORM_WINDOWS
@@ -41,6 +47,8 @@ sentry_options_new(void)
     opts->user_consent = SENTRY_USER_CONSENT_UNKNOWN;
     opts->auto_session_tracking = true;
     opts->system_crash_reporter_enabled = false;
+    opts->attach_screenshot = false;
+    opts->crashpad_wait_for_upload = false;
     opts->symbolize_stacktraces =
     // AIX doesn't have reliable debug IDs for server-side symbolication,
     // and the diversity of Android makes it infeasible to have access to debug
@@ -56,7 +64,8 @@ sentry_options_new(void)
     opts->refcount = 1;
     opts->shutdown_timeout = SENTRY_DEFAULT_SHUTDOWN_TIMEOUT;
     opts->traces_sample_rate = 0.0;
-    opts->max_spans = 0;
+    opts->max_spans = SENTRY_SPANS_MAX;
+    opts->handler_strategy = SENTRY_HANDLER_STRATEGY_DEFAULT;
 
     return opts;
 }
@@ -70,8 +79,8 @@ sentry__options_incref(sentry_options_t *options)
     return options;
 }
 
-void
-sentry__attachment_free(sentry_attachment_t *attachment)
+static void
+attachment_free(sentry_attachment_t *attachment)
 {
     sentry__path_free(attachment->path);
     sentry_free(attachment);
@@ -89,7 +98,7 @@ sentry_options_free(sentry_options_t *opts)
     sentry_free(opts->user_agent);
     sentry_free(opts->environment);
     sentry_free(opts->dist);
-    sentry_free(opts->http_proxy);
+    sentry_free(opts->proxy);
     sentry_free(opts->ca_certs);
     sentry_free(opts->transport_thread_name);
     sentry__path_free(opts->database_path);
@@ -102,7 +111,7 @@ sentry_options_free(sentry_options_t *opts)
         sentry_attachment_t *attachment = next_attachment;
         next_attachment = attachment->next;
 
-        sentry__attachment_free(attachment);
+        attachment_free(attachment);
     }
     sentry__run_free(opts->run);
 
@@ -235,24 +244,43 @@ sentry_options_get_dist(const sentry_options_t *opts)
 }
 
 void
+sentry_options_set_proxy_n(
+    sentry_options_t *opts, const char *proxy, size_t proxy_len)
+{
+    sentry_free(opts->proxy);
+    opts->proxy = sentry__string_clone_n(proxy, proxy_len);
+}
+
+void
+sentry_options_set_proxy(sentry_options_t *opts, const char *proxy)
+{
+    sentry_free(opts->proxy);
+    opts->proxy = sentry__string_clone(proxy);
+}
+
+const char *
+sentry_options_get_proxy(const sentry_options_t *opts)
+{
+    return opts->proxy;
+}
+
+void
 sentry_options_set_http_proxy_n(
     sentry_options_t *opts, const char *proxy, size_t proxy_len)
 {
-    sentry_free(opts->http_proxy);
-    opts->http_proxy = sentry__string_clone_n(proxy, proxy_len);
+    sentry_options_set_proxy_n(opts, proxy, proxy_len);
 }
 
 void
 sentry_options_set_http_proxy(sentry_options_t *opts, const char *proxy)
 {
-    sentry_free(opts->http_proxy);
-    opts->http_proxy = sentry__string_clone(proxy);
+    sentry_options_set_proxy(opts, proxy);
 }
 
 const char *
 sentry_options_get_http_proxy(const sentry_options_t *opts)
 {
-    return opts->http_proxy;
+    return sentry_options_get_proxy(opts);
 }
 
 void
@@ -377,6 +405,12 @@ sentry_options_set_logger(
 }
 
 void
+sentry_options_set_logger_level(sentry_options_t *opts, sentry_level_t level)
+{
+    opts->logger.logger_level = level;
+}
+
+void
 sentry_options_set_auto_session_tracking(sentry_options_t *opts, int val)
 {
     opts->auto_session_tracking = !!val;
@@ -420,6 +454,13 @@ sentry_options_set_system_crash_reporter_enabled(
 }
 
 void
+sentry_options_set_crashpad_wait_for_upload(
+    sentry_options_t *opts, int wait_for_upload)
+{
+    opts->crashpad_wait_for_upload = !!wait_for_upload;
+}
+
+void
 sentry_options_set_shutdown_timeout(
     sentry_options_t *opts, uint64_t shutdown_timeout)
 {
@@ -459,6 +500,12 @@ sentry_options_add_attachment_n(
     sentry_options_t *opts, const char *path, size_t path_len)
 {
     add_attachment(opts, sentry__path_from_str_n(path, path_len));
+}
+
+void
+sentry_options_set_attach_screenshot(sentry_options_t *opts, int val)
+{
+    opts->attach_screenshot = !!val;
 }
 
 void
@@ -573,10 +620,6 @@ sentry_options_set_traces_sample_rate(
         sample_rate = 1.0;
     }
     opts->traces_sample_rate = sample_rate;
-
-    if (sample_rate > 0 && opts->max_spans == 0) {
-        opts->max_spans = SENTRY_SPANS_MAX;
-    }
 }
 
 /**
@@ -589,8 +632,32 @@ sentry_options_get_traces_sample_rate(sentry_options_t *opts)
 }
 
 void
+sentry_options_set_traces_sampler(
+    sentry_options_t *opts, sentry_traces_sampler_function callback)
+{
+    opts->traces_sampler = callback;
+}
+
+void
 sentry_options_set_backend(sentry_options_t *opts, sentry_backend_t *backend)
 {
     sentry__backend_free(opts->backend);
     opts->backend = backend;
 }
+
+#ifdef SENTRY_PLATFORM_LINUX
+
+sentry_handler_strategy_t
+sentry_options_get_handler_strategy(const sentry_options_t *opts)
+{
+    return opts->handler_strategy;
+}
+
+void
+sentry_options_set_handler_strategy(
+    sentry_options_t *opts, sentry_handler_strategy_t handler_strategy)
+{
+    opts->handler_strategy = handler_strategy;
+}
+
+#endif // SENTRY_PLATFORM_LINUX

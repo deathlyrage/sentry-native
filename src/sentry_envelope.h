@@ -5,13 +5,13 @@
 #include "sentry_core.h"
 
 #include "sentry_path.h"
+#include "sentry_ratelimiter.h"
 #include "sentry_session.h"
 #include "sentry_string.h"
 
 #define SENTRY_MAX_ENVELOPE_ITEMS 10
 
 typedef struct sentry_envelope_item_s sentry_envelope_item_t;
-typedef struct sentry_rate_limiter_s sentry_rate_limiter_t;
 
 /**
  * Create a new empty envelope.
@@ -53,6 +53,13 @@ sentry_envelope_item_t *sentry__envelope_add_user_feedback(
  */
 sentry_envelope_item_t *sentry__envelope_add_session(
     sentry_envelope_t *envelope, const sentry_session_t *session);
+
+/**
+ * Add an attachment to this envelope.
+ */
+sentry_envelope_item_t *sentry__envelope_add_attachment(
+    sentry_envelope_t *envelope, const sentry_path_t *attachment,
+    const char *type);
 
 /**
  * This will add the file contents from `path` as an envelope item of type

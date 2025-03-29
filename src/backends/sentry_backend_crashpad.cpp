@@ -11,6 +11,7 @@ extern "C" {
 #    include "sentry_os.h"
 #endif
 #include "sentry_path.h"
+#include "sentry_screenshot.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
 #ifdef SENTRY_PLATFORM_LINUX
@@ -33,11 +34,28 @@ extern "C" {
 #    pragma warning(disable : 4100) // unreferenced formal parameter
 #endif
 
+#ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wundef"
+#    pragma clang diagnostic ignored "-Wsign-conversion"
+#    pragma clang diagnostic ignored "-Wextra-semi-stmt"
+#    pragma clang diagnostic ignored "-Wdocumentation-unknown-command"
+#    pragma clang diagnostic ignored "-Wdocumentation"
+#    pragma clang diagnostic ignored "-Wsuggest-destructor-override"
+#    pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#    pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#    pragma clang diagnostic ignored "-Wfour-char-constants"
+#    pragma clang diagnostic ignored                                           \
+        "-Winconsistent-missing-destructor-override"
+#endif
 #include "client/crash_report_database.h"
 #include "client/crashpad_client.h"
 #include "client/crashpad_info.h"
 #include "client/prune_crash_reports.h"
 #include "client/settings.h"
+#ifdef __clang__
+#    pragma clang diagnostic pop
+#endif
 #if defined(_WIN32)
 #    include "util/win/termination_codes.h"
 #endif
@@ -139,7 +157,7 @@ crashpad_register_wer_module(
     }
 
     if (wer_path && sentry__path_is_file(wer_path)) {
-        SENTRY_TRACEF("registering crashpad WER handler "
+        SENTRY_DEBUGF("registering crashpad WER handler "
                       "\"%" SENTRY_PATH_PRI "\"",
             wer_path->path);
 
@@ -186,7 +204,7 @@ crashpad_backend_flush_scope_to_event(const sentry_path_t *event_path,
     sentry_free(mpack);
 
     if (rv != 0) {
-        SENTRY_DEBUG("flushing scope to msgpack failed");
+        SENTRY_WARN("flushing scope to msgpack failed");
     }
 }
 
@@ -257,7 +275,7 @@ sentry__crashpad_handler(int signum, siginfo_t *info, ucontext_t *user_context)
 {
     sentry__page_allocator_enable();
 #    endif
-    SENTRY_DEBUG("flushing session and queue before crashpad handler");
+    SENTRY_INFO("flushing session and queue before crashpad handler");
 
     bool should_dump = true;
 
@@ -276,11 +294,11 @@ sentry__crashpad_handler(int signum, siginfo_t *info, ucontext_t *user_context)
             uctx.user_context = user_context;
 #    endif
 
-            SENTRY_TRACE("invoking `on_crash` hook");
+            SENTRY_DEBUG("invoking `on_crash` hook");
             crash_event = options->on_crash_func(
                 &uctx, crash_event, options->on_crash_data);
         } else if (options->before_send_func) {
-            SENTRY_TRACE("invoking `before_send` hook");
+            SENTRY_DEBUG("invoking `before_send` hook");
             crash_event = options->before_send_func(
                 crash_event, nullptr, options->before_send_data);
         }
@@ -305,12 +323,12 @@ sentry__crashpad_handler(int signum, siginfo_t *info, ucontext_t *user_context)
                 sentry_transport_free(disk_transport);
             }
         } else {
-            SENTRY_TRACE("event was discarded");
+            SENTRY_DEBUG("event was discarded");
         }
         sentry__transport_dump_queue(options->transport, options->run);
     }
 
-    SENTRY_DEBUG("handing control over to crashpad");
+    SENTRY_INFO("handing control over to crashpad");
     // If we __don't__ want a minidump produced by crashpad we need to either
     // exit or longjmp at this point. The crashpad client handler which calls
     // back here (SetFirstChanceExceptionHandler) does the same if the
@@ -392,7 +410,7 @@ crashpad_backend_startup(
         return 1;
     }
 
-    SENTRY_TRACEF("starting crashpad backend with handler "
+    SENTRY_DEBUGF("starting crashpad backend with handler "
                   "\"%" SENTRY_PATH_PRI "\"",
         absolute_handler_path->path);
     sentry_path_t *current_run_folder = options->run->run_path;
@@ -406,7 +424,7 @@ crashpad_backend_startup(
 
     // register attachments
     for (sentry_attachment_t *attachment = options->attachments; attachment;
-         attachment = attachment->next) {
+        attachment = attachment->next) {
         attachments.emplace_back(attachment->path->path);
     }
 
@@ -428,29 +446,42 @@ crashpad_backend_startup(
             base::FilePath(data->breadcrumb1_path->path),
             base::FilePath(data->breadcrumb2_path->path) });
 
+    base::FilePath screenshot;
+    if (options->attach_screenshot) {
+        sentry_path_t *screenshot_path = sentry__screenshot_get_path(options);
+        screenshot = base::FilePath(screenshot_path->path);
+        sentry__path_free(screenshot_path);
+    }
+
     std::vector<std::string> arguments { "--no-rate-limit" };
 
     // Initialize database first, flushing the consent later on as part of
     // `sentry_init` will persist the upload flag.
     data->db = crashpad::CrashReportDatabase::Initialize(database).release();
     data->client = new crashpad::CrashpadClient;
-    bool success;
     char *minidump_url
         = sentry__dsn_get_minidump_url(options->dsn, options->user_agent);
     if (minidump_url) {
-        SENTRY_TRACEF("using minidump URL \"%s\"", minidump_url);
-        success = data->client->StartHandler(handler, database, database,
-            minidump_url, options->http_proxy ? options->http_proxy : "",
-            annotations, arguments,
-            /* restartable */ true,
-            /* asynchronous_start */ false, attachments);
-        sentry_free(minidump_url);
-    } else {
-        SENTRY_WARN(
-            "failed to construct minidump URL (check DSN or user-agent)");
-        crashpad_state_dtor(data);
-        return 1;
+        SENTRY_DEBUGF("using minidump URL \"%s\"", minidump_url);
     }
+    const char *env_proxy = options->dsn
+        ? getenv(options->dsn->is_secure ? "https_proxy" : "http_proxy")
+        : nullptr;
+    const char *proxy_url = options->proxy ? options->proxy
+        : env_proxy                        ? env_proxy
+                                           : "";
+#ifdef SENTRY_PLATFORM_LINUX
+    // explicitly set an empty proxy to avoid reading from env. vars. on Linux
+    if (options->proxy && strcmp(options->proxy, "") == 0) {
+        proxy_url = "<empty>";
+    }
+#endif
+    bool success = data->client->StartHandler(handler, database, database,
+        minidump_url ? minidump_url : "", proxy_url, annotations, arguments,
+        /* restartable */ true,
+        /* asynchronous_start */ false, attachments, screenshot,
+        options->crashpad_wait_for_upload);
+    sentry_free(minidump_url);
 
 #ifdef SENTRY_PLATFORM_WINDOWS
     crashpad_register_wer_module(absolute_handler_path, data);
@@ -459,7 +490,7 @@ crashpad_backend_startup(
     sentry__path_free(absolute_handler_path);
 
     if (success) {
-        SENTRY_DEBUG("started crashpad client handler");
+        SENTRY_INFO("started crashpad client handler");
     } else {
         SENTRY_WARN("failed to start crashpad client handler");
         // not calling `shutdown`
@@ -551,7 +582,7 @@ crashpad_backend_add_breadcrumb(sentry_backend_t *backend,
     sentry_free(mpack);
 
     if (rv != 0) {
-        SENTRY_DEBUG("flushing breadcrumb to msgpack failed");
+        SENTRY_WARN("flushing breadcrumb to msgpack failed");
     }
 }
 

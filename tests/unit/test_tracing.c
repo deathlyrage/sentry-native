@@ -52,70 +52,70 @@ SENTRY_TEST(basic_tracing_context)
 
 SENTRY_TEST(basic_transaction)
 {
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new(NULL, NULL);
-    sentry_value_t tx_cxt;
-    if (opaque_tx_cxt != NULL) {
-        tx_cxt = opaque_tx_cxt->inner;
-        TEST_CHECK(!sentry_value_is_null(tx_cxt));
-        CHECK_STRING_PROPERTY(tx_cxt, "transaction", "");
-        CHECK_STRING_PROPERTY(tx_cxt, "op", "");
-        TEST_CHECK(!IS_NULL(tx_cxt, "trace_id"));
-        TEST_CHECK(!IS_NULL(tx_cxt, "span_id"));
+    sentry_value_t tx_ctx;
+    if (opaque_tx_ctx != NULL) {
+        tx_ctx = opaque_tx_ctx->inner;
+        TEST_CHECK(!sentry_value_is_null(tx_ctx));
+        CHECK_STRING_PROPERTY(tx_ctx, "transaction", "");
+        CHECK_STRING_PROPERTY(tx_ctx, "op", "");
+        TEST_CHECK(!IS_NULL(tx_ctx, "trace_id"));
+        TEST_CHECK(!IS_NULL(tx_ctx, "span_id"));
     } else {
-        TEST_CHECK(opaque_tx_cxt != NULL);
+        TEST_CHECK(opaque_tx_ctx != NULL);
     }
 
-    sentry__transaction_context_free(opaque_tx_cxt);
+    sentry__transaction_context_free(opaque_tx_ctx);
 
-    opaque_tx_cxt = sentry_transaction_context_new("", "");
-    if (opaque_tx_cxt != NULL) {
-        tx_cxt = opaque_tx_cxt->inner;
-        TEST_CHECK(!sentry_value_is_null(tx_cxt));
-        CHECK_STRING_PROPERTY(tx_cxt, "transaction", "");
-        CHECK_STRING_PROPERTY(tx_cxt, "op", "");
-        TEST_CHECK(!IS_NULL(tx_cxt, "trace_id"));
-        TEST_CHECK(!IS_NULL(tx_cxt, "span_id"));
+    opaque_tx_ctx = sentry_transaction_context_new("", "");
+    if (opaque_tx_ctx != NULL) {
+        tx_ctx = opaque_tx_ctx->inner;
+        TEST_CHECK(!sentry_value_is_null(tx_ctx));
+        CHECK_STRING_PROPERTY(tx_ctx, "transaction", "");
+        CHECK_STRING_PROPERTY(tx_ctx, "op", "");
+        TEST_CHECK(!IS_NULL(tx_ctx, "trace_id"));
+        TEST_CHECK(!IS_NULL(tx_ctx, "span_id"));
     } else {
-        TEST_CHECK(opaque_tx_cxt != NULL);
+        TEST_CHECK(opaque_tx_ctx != NULL);
     }
 
-    sentry__transaction_context_free(opaque_tx_cxt);
+    sentry__transaction_context_free(opaque_tx_ctx);
 
-    opaque_tx_cxt = sentry_transaction_context_new("honk.beep", "beepbeep");
-    if (opaque_tx_cxt != NULL) {
-        tx_cxt = opaque_tx_cxt->inner;
-        TEST_CHECK(!sentry_value_is_null(tx_cxt));
-        CHECK_STRING_PROPERTY(tx_cxt, "transaction", "honk.beep");
-        CHECK_STRING_PROPERTY(tx_cxt, "op", "beepbeep");
-        TEST_CHECK(!IS_NULL(tx_cxt, "trace_id"));
-        TEST_CHECK(!IS_NULL(tx_cxt, "span_id"));
+    opaque_tx_ctx = sentry_transaction_context_new("honk.beep", "beepbeep");
+    if (opaque_tx_ctx != NULL) {
+        tx_ctx = opaque_tx_ctx->inner;
+        TEST_CHECK(!sentry_value_is_null(tx_ctx));
+        CHECK_STRING_PROPERTY(tx_ctx, "transaction", "honk.beep");
+        CHECK_STRING_PROPERTY(tx_ctx, "op", "beepbeep");
+        TEST_CHECK(!IS_NULL(tx_ctx, "trace_id"));
+        TEST_CHECK(!IS_NULL(tx_ctx, "span_id"));
 
-        sentry_transaction_context_set_name(opaque_tx_cxt, "");
-        CHECK_STRING_PROPERTY(tx_cxt, "transaction", "");
+        sentry_transaction_context_set_name(opaque_tx_ctx, "");
+        CHECK_STRING_PROPERTY(tx_ctx, "transaction", "");
 
         char txn_ctx_name[] = { 'h', 'o', 'n', 'k', '.', 'b', 'e', 'e', 'p' };
         sentry_transaction_context_set_name_n(
-            opaque_tx_cxt, txn_ctx_name, sizeof(txn_ctx_name));
-        CHECK_STRING_PROPERTY(tx_cxt, "transaction", "honk.beep");
+            opaque_tx_ctx, txn_ctx_name, sizeof(txn_ctx_name));
+        CHECK_STRING_PROPERTY(tx_ctx, "transaction", "honk.beep");
 
-        sentry_transaction_context_set_operation(opaque_tx_cxt, "");
-        CHECK_STRING_PROPERTY(tx_cxt, "op", "");
+        sentry_transaction_context_set_operation(opaque_tx_ctx, "");
+        CHECK_STRING_PROPERTY(tx_ctx, "op", "");
 
         char txn_ctx_op[] = { 'b', 'e', 'e', 'p', 'b', 'e', 'e', 'p' };
         sentry_transaction_context_set_operation_n(
-            opaque_tx_cxt, txn_ctx_op, sizeof(txn_ctx_op));
-        CHECK_STRING_PROPERTY(tx_cxt, "op", "beepbeep");
+            opaque_tx_ctx, txn_ctx_op, sizeof(txn_ctx_op));
+        CHECK_STRING_PROPERTY(tx_ctx, "op", "beepbeep");
 
-        sentry_transaction_context_set_sampled(opaque_tx_cxt, 1);
+        sentry_transaction_context_set_sampled(opaque_tx_ctx, 1);
         TEST_CHECK(
-            sentry_value_is_true(sentry_value_get_by_key(tx_cxt, "sampled"))
+            sentry_value_is_true(sentry_value_get_by_key(tx_ctx, "sampled"))
             == 1);
     } else {
-        TEST_CHECK(opaque_tx_cxt != NULL);
+        TEST_CHECK(opaque_tx_ctx != NULL);
     }
 
-    sentry__transaction_context_free(opaque_tx_cxt);
+    sentry__transaction_context_free(opaque_tx_ctx);
 }
 
 static void
@@ -135,7 +135,7 @@ SENTRY_TEST(transaction_name_backfill_on_finish)
 {
     uint64_t called = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport = sentry_transport_new(check_backfilled_name);
@@ -145,15 +145,15 @@ SENTRY_TEST(transaction_name_backfill_on_finish)
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_init(options);
 
-    sentry_transaction_context_t *tx_cxt
+    sentry_transaction_context_t *tx_ctx
         = sentry_transaction_context_new(NULL, NULL);
     sentry_transaction_t *tx
-        = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     sentry_uuid_t event_id = sentry_transaction_finish(tx);
     TEST_CHECK(!sentry_uuid_is_nil(&event_id));
 
-    tx_cxt = sentry_transaction_context_new("", "");
-    tx = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+    tx_ctx = sentry_transaction_context_new("", "");
+    tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     event_id = sentry_transaction_finish(tx);
     TEST_CHECK(!sentry_uuid_is_nil(&event_id));
 
@@ -180,11 +180,12 @@ send_transaction_envelope_test_basic(sentry_envelope_t *envelope, void *data)
     sentry_envelope_free(envelope);
 }
 
-SENTRY_TEST(basic_function_transport_transaction)
+void
+run_basic_function_transport_transaction(bool timestamped)
 {
     uint64_t called = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport
@@ -196,44 +197,81 @@ SENTRY_TEST(basic_function_transport_transaction)
     sentry_options_set_require_user_consent(options, true);
     sentry_init(options);
 
-    sentry_transaction_context_t *tx_cxt = sentry_transaction_context_new(
+    sentry_transaction_context_t *tx_ctx = sentry_transaction_context_new(
         "How could you", "Don't capture this.");
-    sentry_transaction_t *tx
-        = sentry_transaction_start(tx_cxt, sentry_value_new_null());
-    sentry_uuid_t event_id = sentry_transaction_finish(tx);
+    sentry_transaction_t *tx;
     // TODO: `sentry_capture_event` acts as if the event was sent if user
-    // consent was not given
-    TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    //  consent was not given
+    if (timestamped) {
+        tx = sentry_transaction_start_ts(tx_ctx, sentry_value_new_null(), 1);
+        CHECK_STRING_PROPERTY(
+            tx->inner, "start_timestamp", "1970-01-01T00:00:00.000001Z");
+        sentry_uuid_t event_id = sentry_transaction_finish_ts(tx, 2);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    } else {
+        tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
+        sentry_uuid_t event_id = sentry_transaction_finish(tx);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    }
+
     sentry_user_consent_give();
     char name[] = { 'h', 'o', 'n', 'k' };
     char op[] = { 'b', 'e', 'e', 'p' };
-    tx_cxt
+    tx_ctx
         = sentry_transaction_context_new_n(name, sizeof(name), op, sizeof(op));
-    tx = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+    if (timestamped) {
+        tx = sentry_transaction_start_ts(tx_ctx, sentry_value_new_null(), 3);
+        CHECK_STRING_PROPERTY(
+            tx->inner, "start_timestamp", "1970-01-01T00:00:00.000003Z");
+    } else {
+        tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
+    }
     CHECK_STRING_PROPERTY(tx->inner, "transaction", "honk");
     CHECK_STRING_PROPERTY(tx->inner, "op", "beep");
-    event_id = sentry_transaction_finish(tx);
-    TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    if (timestamped) {
+        sentry_uuid_t event_id = sentry_transaction_finish_ts(tx, 4);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    } else {
+        sentry_uuid_t event_id = sentry_transaction_finish(tx);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    }
 
     sentry_user_consent_revoke();
-    tx_cxt = sentry_transaction_context_new(
+    tx_ctx = sentry_transaction_context_new(
         "How could you again", "Don't capture this either.");
-    tx = sentry_transaction_start(tx_cxt, sentry_value_new_null());
-    event_id = sentry_transaction_finish(tx);
     // TODO: `sentry_capture_event` acts as if the event was sent if user
-    // consent was not given
-    TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    //  consent was not given
+    if (timestamped) {
+        tx = sentry_transaction_start_ts(tx_ctx, sentry_value_new_null(), 5);
+        CHECK_STRING_PROPERTY(
+            tx->inner, "start_timestamp", "1970-01-01T00:00:00.000005Z");
+        sentry_uuid_t event_id = sentry_transaction_finish_ts(tx, 6);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    } else {
+        tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
+        sentry_uuid_t event_id = sentry_transaction_finish(tx);
+        TEST_CHECK(!sentry_uuid_is_nil(&event_id));
+    }
 
     sentry_close();
 
     TEST_CHECK_INT_EQUAL(called, 1);
+}
+SENTRY_TEST(basic_function_transport_transaction)
+{
+    run_basic_function_transport_transaction(false);
+}
+
+SENTRY_TEST(basic_function_transport_transaction_ts)
+{
+    run_basic_function_transport_transaction(true);
 }
 
 SENTRY_TEST(transport_sampling_transactions)
 {
     uint64_t called_transport = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport
@@ -246,10 +284,10 @@ SENTRY_TEST(transport_sampling_transactions)
 
     uint64_t sent_transactions = 0;
     for (int i = 0; i < 100; i++) {
-        sentry_transaction_context_t *tx_cxt
+        sentry_transaction_context_t *tx_ctx
             = sentry_transaction_context_new("honk", "beep");
         sentry_transaction_t *tx
-            = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+            = sentry_transaction_start(tx_ctx, sentry_value_new_null());
         sentry_uuid_t event_id = sentry_transaction_finish(tx);
         if (!sentry_uuid_is_nil(&event_id)) {
             sent_transactions += 1;
@@ -278,7 +316,7 @@ SENTRY_TEST(transactions_skip_before_send)
     uint64_t called_beforesend = 0;
     uint64_t called_transport = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport
@@ -290,10 +328,10 @@ SENTRY_TEST(transactions_skip_before_send)
     sentry_options_set_before_send(options, before_send, &called_beforesend);
     sentry_init(options);
 
-    sentry_transaction_context_t *tx_cxt
+    sentry_transaction_context_t *tx_ctx
         = sentry_transaction_context_new("honk", "beep");
     sentry_transaction_t *tx
-        = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     sentry_uuid_t event_id = sentry_transaction_finish(tx);
     TEST_CHECK(!sentry_uuid_is_nil(&event_id));
 
@@ -316,7 +354,7 @@ SENTRY_TEST(multiple_transactions)
 {
     uint64_t called_transport = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport = sentry_transport_new(before_transport);
@@ -326,10 +364,10 @@ SENTRY_TEST(multiple_transactions)
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_init(options);
 
-    sentry_transaction_context_t *tx_cxt
+    sentry_transaction_context_t *tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
     sentry_transaction_t *tx
-        = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     sentry_set_transaction_object(tx);
 
     sentry_value_t scope_tx = sentry__scope_get_span_or_transaction();
@@ -342,12 +380,12 @@ SENTRY_TEST(multiple_transactions)
 
     // Set transaction on scope twice, back-to-back without finishing the first
     // one
-    tx_cxt = sentry_transaction_context_new("whoa!", NULL);
-    tx = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+    tx_ctx = sentry_transaction_context_new("whoa!", NULL);
+    tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     sentry_set_transaction_object(tx);
     sentry__transaction_decref(tx);
-    tx_cxt = sentry_transaction_context_new("wowee!", NULL);
-    tx = sentry_transaction_start(tx_cxt, sentry_value_new_null());
+    tx_ctx = sentry_transaction_context_new("wowee!", NULL);
+    tx = sentry_transaction_start(tx_ctx, sentry_value_new_null());
     sentry_set_transaction_object(tx);
     scope_tx = sentry__scope_get_span_or_transaction();
     CHECK_STRING_PROPERTY(scope_tx, "transaction", "wowee!");
@@ -361,7 +399,7 @@ SENTRY_TEST(multiple_transactions)
 
 SENTRY_TEST(basic_spans)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_init(options);
 
@@ -370,10 +408,10 @@ SENTRY_TEST(basic_spans)
         = sentry_transaction_start_child(NULL, NULL, NULL);
     TEST_CHECK(!parentless_child);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
     sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
     sentry_value_t tx = opaque_tx->inner;
 
     sentry_span_t *opaque_child
@@ -415,14 +453,14 @@ SENTRY_TEST(basic_spans)
 
 SENTRY_TEST(spans_on_scope)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_init(options);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
     sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
     sentry_set_transaction_object(opaque_tx);
 
     sentry_span_t *opaque_child
@@ -464,34 +502,63 @@ SENTRY_TEST(spans_on_scope)
     sentry_close();
 }
 
-SENTRY_TEST(child_spans)
+void
+run_child_spans_test(bool timestamped)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_options_set_max_spans(options, 3);
     sentry_init(options);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
-    sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+    sentry_transaction_t *opaque_tx;
+    if (timestamped) {
+        opaque_tx = sentry_transaction_start_ts(
+            opaque_tx_ctx, sentry_value_new_null(), 1);
+        CHECK_STRING_PROPERTY(
+            opaque_tx->inner, "start_timestamp", "1970-01-01T00:00:00.000001Z");
+    } else {
+        opaque_tx
+            = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
+    }
     sentry_value_t tx = opaque_tx->inner;
 
-    sentry_span_t *opaque_child
-        = sentry_transaction_start_child(opaque_tx, "honk", "goose");
+    sentry_span_t *opaque_child;
+    if (timestamped) {
+        opaque_child
+            = sentry_transaction_start_child_ts(opaque_tx, "honk", "goose", 2);
+        CHECK_STRING_PROPERTY(opaque_child->inner, "start_timestamp",
+            "1970-01-01T00:00:00.000002Z");
+    } else {
+        opaque_child
+            = sentry_transaction_start_child(opaque_tx, "honk", "goose");
+    }
     sentry_value_t child = opaque_child->inner;
     TEST_CHECK(!sentry_value_is_null(child));
     // Shouldn't be added to spans yet
     TEST_CHECK(IS_NULL(tx, "spans"));
 
-    sentry_span_t *opaque_grandchild
-        = sentry_span_start_child(opaque_child, "beep", "car");
+    sentry_span_t *opaque_grandchild;
+    if (timestamped) {
+        opaque_grandchild
+            = sentry_span_start_child_ts(opaque_child, "beep", "car", 3);
+        CHECK_STRING_PROPERTY(opaque_grandchild->inner, "start_timestamp",
+            "1970-01-01T00:00:00.000003Z");
+    } else {
+        opaque_grandchild
+            = sentry_span_start_child(opaque_child, "beep", "car");
+    }
     sentry_value_t grandchild = opaque_grandchild->inner;
     TEST_CHECK(!sentry_value_is_null(grandchild));
     // Shouldn't be added to spans yet
     TEST_CHECK(IS_NULL(tx, "spans"));
 
-    sentry_span_finish(opaque_grandchild);
+    if (timestamped) {
+        sentry_span_finish_ts(opaque_grandchild, 4);
+    } else {
+        sentry_span_finish(opaque_grandchild);
+    }
 
     // Make sure everything on the transaction looks good, check grandchild
     const char *trace_id
@@ -511,26 +578,33 @@ SENTRY_TEST(child_spans)
     // Should be finished
     TEST_CHECK(!IS_NULL(stored_grandchild, "timestamp"));
 
-    sentry_span_finish(opaque_child);
+    if (timestamped) {
+        sentry_span_finish_ts(opaque_child, 5);
+    } else {
+        sentry_span_finish(opaque_child);
+    }
     spans = sentry_value_get_by_key(tx, "spans");
     TEST_CHECK_INT_EQUAL(sentry_value_get_length(spans), 2);
 
     sentry__transaction_decref(opaque_tx);
-
     sentry_close();
 }
 
+SENTRY_TEST(child_spans) { run_child_spans_test(false); }
+
+SENTRY_TEST(child_spans_ts) { run_child_spans_test(true); }
+
 SENTRY_TEST(overflow_spans)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_options_set_max_spans(options, 1);
     sentry_init(options);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
     sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
     sentry_value_t tx = opaque_tx->inner;
 
     sentry_span_t *opaque_child
@@ -573,15 +647,15 @@ SENTRY_TEST(overflow_spans)
 
 SENTRY_TEST(unsampled_spans)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_traces_sample_rate(options, 1.0);
     sentry_init(options);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("noisemakers", NULL);
-    sentry_transaction_context_set_sampled(opaque_tx_cxt, 0);
+    sentry_transaction_context_set_sampled(opaque_tx_ctx, 0);
     sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
     sentry_value_t tx = opaque_tx->inner;
     TEST_CHECK(!sentry_value_is_true(sentry_value_get_by_key(tx, "sampled")));
 
@@ -659,7 +733,7 @@ SENTRY_TEST(drop_unfinished_spans)
 {
     uint64_t called_transport = 0;
 
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_transport_t *transport = sentry_transport_new(check_spans);
@@ -670,10 +744,10 @@ SENTRY_TEST(drop_unfinished_spans)
     sentry_options_set_max_spans(options, 2);
     sentry_init(options);
 
-    sentry_transaction_context_t *opaque_tx_cxt
+    sentry_transaction_context_t *opaque_tx_ctx
         = sentry_transaction_context_new("wow!", NULL);
     sentry_transaction_t *opaque_tx
-        = sentry_transaction_start(opaque_tx_cxt, sentry_value_new_null());
+        = sentry_transaction_start(opaque_tx_ctx, sentry_value_new_null());
     sentry_value_t tx = opaque_tx->inner;
 
     sentry_span_t *opaque_child
@@ -719,7 +793,7 @@ SENTRY_TEST(update_from_header_null_ctx)
 
 SENTRY_TEST(update_from_header_no_sampled_flag)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_options_set_traces_sample_rate(options, 1.0);
@@ -748,9 +822,126 @@ SENTRY_TEST(update_from_header_no_sampled_flag)
     sentry_close();
 }
 
+SENTRY_TEST(distributed_headers_invalid_traceid)
+{
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+
+    sentry_init(options);
+
+    sentry_transaction_context_t *tx_ctx
+        = sentry_transaction_context_new("sanity_check", NULL);
+
+    const char *valid_trace_header
+        = "2674eb52d5874b13b560236d6c79ce8a-a0f9fdf04f1a63df-1";
+    // expected should match the valid trace_id from the header
+    const char *expected_trace_id = "2674eb52d5874b13b560236d6c79ce8a";
+
+    // sanity check test case
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", valid_trace_header);
+    const char *valid_trace_id = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "trace_id"));
+    TEST_CHECK_STRING_EQUAL(valid_trace_id, expected_trace_id);
+
+    // case 1: string with two dashes (nothing inbetween)
+    const char *trace_header = "--";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header);
+    const char *new_trace_id = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "trace_id"));
+    // expect to have the trace_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_trace_id, expected_trace_id);
+
+    // case 2: string with two dashes (trace_id too short)
+    const char *trace_header_short = "2-a0f9fdf04f1a63df-1";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header_short);
+    const char *new_trace_id_short = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "trace_id"));
+    // expect to have the trace_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_trace_id_short, expected_trace_id);
+
+    // case 3: string with two dashes (trace_id too long)
+    const char *trace_header_long = "2674eb52d5874b13b560236d6c79ce8a2674eb52d5"
+                                    "874b13b560236d6c79ce8a-a0f9fdf04f1a63df-1";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header_long);
+    const char *new_trace_id_long = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "trace_id"));
+    // expect to have the trace_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_trace_id_long, expected_trace_id);
+
+    sentry__transaction_context_free(tx_ctx);
+    sentry_close();
+}
+
+SENTRY_TEST(distributed_headers_invalid_spanid)
+{
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+
+    sentry_init(options);
+
+    sentry_transaction_context_t *tx_ctx
+        = sentry_transaction_context_new("wow!", NULL);
+
+    const char *valid_trace_header
+        = "2674eb52d5874b13b560236d6c79ce8a-a0f9fdf04f1a63df-1";
+    // expected should match the valid parent_span_id from the header
+    const char *expected_parent_span_id = "a0f9fdf04f1a63df";
+
+    // sanity check test case
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", valid_trace_header);
+    const char *valid_parent_span_id = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "parent_span_id"));
+    TEST_CHECK_STRING_EQUAL(valid_parent_span_id, expected_parent_span_id);
+
+    // case 1: string with two dashes (nothing inbetween)
+    const char *trace_header = "--";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header);
+    const char *new_parent_span_id = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "parent_span_id"));
+    // expect to have the parent_span_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_parent_span_id, expected_parent_span_id);
+
+    // case 2: string with two dashes (parent_span_id too short)
+    const char *trace_header_short = "2674eb52d5874b13b560236d6c79ce8a-a-1";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header_short);
+    const char *new_parent_span_id_short = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "parent_span_id"));
+    // expect to have the parent_span_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_parent_span_id_short, expected_parent_span_id);
+
+    // case 3: string with two dashes (parent_span_id too long)
+    const char *trace_header_long
+        = "2674eb52d5874b13b560236d6c79ce8a-a0f9fdf04f1a63dfa0f9fdf04f1a63df-1";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header_long);
+    const char *new_parent_span_id_long = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "parent_span_id"));
+    // expect to have the parent_span_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_parent_span_id_long, expected_parent_span_id);
+
+    // case 4: string with one dash (span_id empty)
+    const char *trace_header_empty_span = "2674eb52d5874b13b560236d6c79ce8a-";
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header_empty_span);
+    const char *new_parent_span_id_empty = sentry_value_as_string(
+        sentry_value_get_by_key(tx_ctx->inner, "parent_span_id"));
+    // expect to have the parent_span_id remain unchanged
+    TEST_CHECK_STRING_EQUAL(new_parent_span_id_empty, expected_parent_span_id);
+
+    sentry__transaction_context_free(tx_ctx);
+    sentry_close();
+}
+
 SENTRY_TEST(distributed_headers)
 {
-    sentry_options_t *options = sentry_options_new();
+    SENTRY_TEST_OPTIONS_NEW(options);
     sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
 
     sentry_options_set_traces_sample_rate(options, 1.0);
@@ -972,10 +1163,10 @@ SENTRY_TEST(txn_data)
 
     sentry_transaction_set_data(
         txn, "os.name", sentry_value_new_string("Linux"));
-    check_after_set(txn->inner, "extra", "os.name", "Linux");
+    check_after_set(txn->inner, "data", "os.name", "Linux");
 
     sentry_transaction_remove_data(txn, "os.name");
-    check_after_remove(txn->inner, "extra", "os.name");
+    check_after_remove(txn->inner, "data", "os.name");
 
     sentry__transaction_decref(txn);
 }
@@ -1022,10 +1213,10 @@ SENTRY_TEST(txn_data_n)
     sentry_value_t data_value
         = sentry_value_new_string_n(data_v, sizeof(data_v));
     sentry_transaction_set_data_n(txn, data_k, sizeof(data_k), data_value);
-    check_after_set(txn->inner, "extra", "os.name", "Linux");
+    check_after_set(txn->inner, "data", "os.name", "Linux");
 
     sentry_transaction_remove_data_n(txn, data_k, sizeof(data_k));
-    check_after_remove(txn->inner, "extra", "os.name");
+    check_after_remove(txn->inner, "data", "os.name");
 
     sentry__transaction_decref(txn);
 }
@@ -1056,7 +1247,8 @@ SENTRY_TEST(sentry__value_span_new_requires_unfinished_parent)
     // timestamps are typically iso8601 strings, but this is irrelevant to
     // `sentry__value_span_new` which just wants `timestamp` to not be null.
     sentry_value_set_by_key(parent, "timestamp", sentry_value_new_object());
-    sentry_value_t inner_span = sentry__value_span_new(0, parent, NULL, NULL);
+    sentry_value_t inner_span
+        = sentry__value_span_new(0, parent, NULL, NULL, 0);
     TEST_CHECK(sentry_value_is_null(inner_span));
 
     sentry_value_decref(parent);
@@ -1102,6 +1294,119 @@ SENTRY_TEST(set_tag_cuts_value_at_length_200)
         200);
 
     sentry__transaction_decref(txn);
+}
+
+SENTRY_TEST(set_trace)
+{
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+    sentry_init(options);
+
+    const char *trace_id = "2674eb52d5874b13b560236d6c79ce8a";
+    const char *parent_span_id = "a0f9fdf04f1a63df";
+
+    sentry_set_trace(trace_id, parent_span_id);
+
+    SENTRY_WITH_SCOPE (scope) {
+        sentry_value_t trace_context
+            = sentry_value_get_by_key(scope->contexts, "trace");
+        TEST_CHECK(!sentry_value_is_null(trace_context));
+
+        CHECK_STRING_PROPERTY(trace_context, "type", "trace");
+
+        CHECK_STRING_PROPERTY(trace_context, "trace_id", trace_id);
+        CHECK_STRING_PROPERTY(trace_context, "parent_span_id", parent_span_id);
+
+        const char *span_id = sentry_value_as_string(
+            sentry_value_get_by_key(trace_context, "span_id"));
+        TEST_ASSERT(span_id != NULL);
+        TEST_CHECK(strlen(span_id) > 0);
+    }
+
+    sentry_close();
+}
+
+void
+apply_scope_and_check_trace_context(
+    sentry_options_t *options, const char *trace_id, const char *parent_span_id)
+{
+    // simulate scope application onto an event
+    sentry_value_t event = sentry_value_new_object();
+    SENTRY_WITH_SCOPE (scope) {
+        sentry__scope_apply_to_event(scope, options, event, SENTRY_SCOPE_NONE);
+    }
+
+    // check that the event has a trace context
+    sentry_value_t event_contexts = sentry_value_get_by_key(event, "contexts");
+    TEST_CHECK(!sentry_value_is_null(event_contexts));
+    TEST_CHECK(
+        sentry_value_get_type(event_contexts) == SENTRY_VALUE_TYPE_OBJECT);
+
+    sentry_value_t event_trace_context
+        = sentry_value_get_by_key(event_contexts, "trace");
+    TEST_CHECK(!sentry_value_is_null(event_trace_context));
+    TEST_CHECK(
+        sentry_value_get_type(event_trace_context) == SENTRY_VALUE_TYPE_OBJECT);
+
+    // check trace context content
+    const char *event_trace_id = sentry_value_as_string(
+        sentry_value_get_by_key(event_trace_context, "trace_id"));
+    TEST_CHECK_STRING_EQUAL(event_trace_id, trace_id);
+
+    const char *event_trace_parent_span_id = sentry_value_as_string(
+        sentry_value_get_by_key(event_trace_context, "parent_span_id"));
+    TEST_CHECK_STRING_EQUAL(event_trace_parent_span_id, parent_span_id);
+
+    sentry_uuid_t event_trace_span_id = sentry__value_as_uuid(
+        sentry_value_get_by_key(event_trace_context, "span_id"));
+    TEST_CHECK(!sentry_uuid_is_nil(&event_trace_span_id));
+
+    sentry_value_decref(event);
+}
+
+SENTRY_TEST(set_trace_id_with_txn)
+{
+    // initialize SDK so we have a scope
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_traces_sample_rate(options, 1.0);
+    sentry_options_set_sample_rate(options, 1.0);
+    sentry_init(options);
+
+    // inject a trace via trace-header into a transaction
+    const char *trace_header
+        = "2674eb52d5874b13b560236d6c79ce8a-a0f9fdf04f1a63df-1";
+    const char *txn_trace_id = "2674eb52d5874b13b560236d6c79ce8a";
+    const char *txn_parent_span_id = "a0f9fdf04f1a63df";
+    sentry_transaction_context_t *tx_ctx
+        = sentry_transaction_context_new("wow!", NULL);
+    sentry_transaction_context_update_from_header(
+        tx_ctx, "sentry-trace", trace_header);
+    sentry_transaction_t *tx
+        = sentry_transaction_start(tx_ctx, sentry_value_new_null());
+
+    // set the direct trace first
+    const char *direct_trace_id = "aaaabbbbccccddddeeeeffff00001111";
+    const char *direct_parent_span_id = "f0f0f0f0f0f0f0f0";
+    sentry_set_trace(direct_trace_id, direct_parent_span_id);
+
+    // events should get that trace applied
+    apply_scope_and_check_trace_context(
+        options, direct_trace_id, direct_parent_span_id);
+
+    // now set a scoped transaction
+    sentry_set_transaction_object(tx);
+
+    // events should get the transaction's trace applied
+    apply_scope_and_check_trace_context(
+        options, txn_trace_id, txn_parent_span_id);
+
+    sentry_transaction_finish(tx);
+
+    // after finishing the transaction, the direct trace should hit again
+    apply_scope_and_check_trace_context(
+        options, direct_trace_id, direct_parent_span_id);
+
+    sentry_close();
 }
 
 #undef IS_NULL

@@ -18,8 +18,8 @@
 static const size_t MAX_READ_TO_BUFFER = 134217728;
 
 #ifndef __MINGW32__
-#    define S_ISREG(m) (((m)&_S_IFMT) == _S_IFREG)
-#    define S_ISDIR(m) (((m)&_S_IFMT) == _S_IFDIR)
+#    define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
+#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #endif
 
 struct sentry_pathiter_s {
@@ -110,7 +110,7 @@ sentry__path_current_exe(void)
     sentry_path_t *path = path_with_len(MAX_PATH);
     size_t len = GetModuleFileNameW(NULL, path->path, MAX_PATH);
     if (!len) {
-        SENTRY_DEBUG("unable to get current exe path");
+        SENTRY_WARN("unable to get current exe path");
         sentry__path_free(path);
         return NULL;
     }
@@ -164,14 +164,15 @@ sentry__path_join_wstr(const sentry_path_t *base, const wchar_t *other)
         return sentry__path_from_wstr(other);
     } else if (other[0] == L'/' || other[0] == L'\\') {
         if (isalpha(base->path[0]) && base->path[1] == L':') {
-            size_t len = wcslen(other) + 3;
-            sentry_path_t *rv = path_with_len(len);
+            size_t other_len = wcslen(other);
+            sentry_path_t *rv = path_with_len(other_len + 3);
             if (!rv) {
                 return NULL;
             }
             rv->path[0] = base->path[0];
             rv->path[1] = L':';
-            memcpy(rv->path + 2, other, sizeof(wchar_t) * len);
+            memcpy(rv->path + 2, other, sizeof(wchar_t) * other_len);
+            rv->path[other_len + 2] = L'\0';
             return rv;
         } else {
             return sentry__path_from_wstr(other);

@@ -22,7 +22,11 @@
 
 static bool g_scope_initialized = false;
 static sentry_scope_t g_scope = { 0 };
+#ifdef SENTRY__MUTEX_INIT_DYN
+SENTRY__MUTEX_INIT_DYN(g_lock)
+#else
 static sentry_mutex_t g_lock = SENTRY__MUTEX_INIT;
+#endif
 
 static sentry_value_t
 get_client_sdk(void)
@@ -87,6 +91,7 @@ get_scope(void)
 void
 sentry__scope_cleanup(void)
 {
+    SENTRY__MUTEX_INIT_DYN_ONCE(g_lock);
     sentry__mutex_lock(&g_lock);
     if (g_scope_initialized) {
         g_scope_initialized = false;
@@ -107,6 +112,7 @@ sentry__scope_cleanup(void)
 sentry_scope_t *
 sentry__scope_lock(void)
 {
+    SENTRY__MUTEX_INIT_DYN_ONCE(g_lock);
     sentry__mutex_lock(&g_lock);
     return get_scope();
 }
@@ -114,6 +120,7 @@ sentry__scope_lock(void)
 void
 sentry__scope_unlock(void)
 {
+    SENTRY__MUTEX_INIT_DYN_ONCE(g_lock);
     sentry__mutex_unlock(&g_lock);
 }
 
@@ -130,6 +137,7 @@ sentry__scope_flush_unlock(void)
     }
 }
 
+#ifndef SENTRY_PLATFORM_NX
 static void
 sentry__foreach_stacktrace(
     sentry_value_t event, void (*func)(sentry_value_t stacktrace))
@@ -230,9 +238,10 @@ sentry__symbolize_stacktrace(sentry_value_t stacktrace)
         sentry__symbolize((void *)addr, sentry__symbolize_frame, &frame);
     }
 }
+#endif
 
-sentry_value_t
-sentry__get_span_or_transaction(const sentry_scope_t *scope)
+static sentry_value_t
+get_span_or_transaction(const sentry_scope_t *scope)
 {
     if (scope->span) {
         return scope->span->inner;
@@ -248,7 +257,7 @@ sentry_value_t
 sentry__scope_get_span_or_transaction(void)
 {
     SENTRY_WITH_SCOPE (scope) {
-        return sentry__get_span_or_transaction(scope);
+        return get_span_or_transaction(scope);
     }
     return sentry_value_new_null();
 }
@@ -318,11 +327,19 @@ sentry__scope_apply_to_event(const sentry_scope_t *scope,
 
     // prep contexts sourced from scope; data about transaction on scope needs
     // to be extracted and inserted
-    sentry_value_t scope_trace = sentry__value_get_trace_context(
-        sentry__get_span_or_transaction(scope));
+    sentry_value_t scoped_txn_or_span = get_span_or_transaction(scope);
+    sentry_value_t scope_trace
+        = sentry__value_get_trace_context(scoped_txn_or_span);
     if (!sentry_value_is_null(scope_trace)) {
         if (sentry_value_is_null(contexts)) {
             contexts = sentry_value_new_object();
+        }
+        sentry_value_t scoped_txn_or_span_data
+            = sentry_value_get_by_key(scoped_txn_or_span, "data");
+        if (!sentry_value_is_null(scoped_txn_or_span_data)) {
+            sentry_value_incref(scoped_txn_or_span_data);
+            sentry_value_set_by_key(
+                scope_trace, "data", scoped_txn_or_span_data);
         }
         sentry_value_set_by_key(contexts, "trace", scope_trace);
     }
@@ -337,9 +354,13 @@ sentry__scope_apply_to_event(const sentry_scope_t *scope,
     sentry_value_decref(contexts);
 
     if (mode & SENTRY_SCOPE_BREADCRUMBS) {
-        PLACE_CLONED_VALUE("breadcrumbs", scope->breadcrumbs);
+        sentry_value_t l
+            = sentry__value_ring_buffer_to_list(scope->breadcrumbs);
+        PLACE_VALUE("breadcrumbs", l);
+        sentry_value_decref(l);
     }
 
+#ifndef SENTRY_PLATFORM_NX
     if (mode & SENTRY_SCOPE_MODULES) {
         sentry_value_t modules = sentry_get_modules_list();
         if (!sentry_value_is_null(modules)) {
@@ -352,6 +373,7 @@ sentry__scope_apply_to_event(const sentry_scope_t *scope,
     if (mode & SENTRY_SCOPE_STACKTRACES) {
         sentry__foreach_stacktrace(event, sentry__symbolize_stacktrace);
     }
+#endif
 
 #undef PLACE_CLONED_VALUE
 #undef PLACE_VALUE

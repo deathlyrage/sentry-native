@@ -90,9 +90,9 @@ def assert_event_meta(
     }
     expected_sdk = {
         "name": "sentry.native",
-        "version": "0.7.9",
+        "version": "0.8.3",
         "packages": [
-            {"name": "github:getsentry/sentry-native", "version": "0.7.9"},
+            {"name": "github:getsentry/sentry-native", "version": "0.8.3"},
         ],
     }
     if is_android:
@@ -114,6 +114,8 @@ def assert_event_meta(
                 event["contexts"]["os"],
                 {"name": "Linux", "version": version, "build": build},
             )
+            assert "distribution_name" in event["contexts"]["os"]
+            assert "distribution_version" in event["contexts"]["os"]
         elif sys.platform == "darwin":
             version = platform.mac_ver()[0].split(".")
             if len(version) < 3:
@@ -205,8 +207,9 @@ def assert_minidump(envelope):
     assert minidump.payload.bytes.startswith(b"MDMP")
 
 
-def assert_timestamp(ts, now=datetime.now(UTC)):
-    assert ts[:11] == now.isoformat()[:11]
+def assert_timestamp(ts):
+    elapsed_time = datetime.now(UTC) - datetime.fromisoformat(ts)
+    assert elapsed_time.total_seconds() < 10
 
 
 def assert_event(envelope, message="Hello World!"):
@@ -342,3 +345,15 @@ def assert_gzip_file_header(output):
 
 def assert_gzip_content_encoding(req):
     assert req.content_encoding == "gzip"
+
+
+def assert_no_proxy_request(stdout):
+    assert "POST" not in stdout
+
+
+def assert_failed_proxy_auth_request(stdout):
+    assert (
+        "POST" in stdout
+        and "407 Proxy Authentication Required" in stdout
+        and "200 OK" not in stdout
+    )

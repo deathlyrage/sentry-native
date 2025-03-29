@@ -10,37 +10,14 @@
 #    include "sentry_os.h"
 #endif
 #include "sentry_scope.h"
+#include "sentry_screenshot.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
 #include "sentry_unix_pageallocator.h"
 #include "transports/sentry_disk_transport.h"
 #include <string.h>
 
-/**
- * Android's bionic libc seems to allocate alternate signal handler stacks for
- * every thread and also references them from their internal maintenance
- * structs.
- *
- * The way we currently set up our sigaltstack seems to interfere with this
- * setup and causes crashes whenever an ART signal handler touches the thread
- * that called `sentry_init()`.
- *
- * In addition to this problem, it also means there is no need for our own
- * sigaltstack on Android since our signal handler will always be running on
- * an alternate stack managed by bionic.
- *
- * Note: In bionic the sigaltstacks for 32-bit devices have a size of 16KiB and
- * on 64-bit devices they have 32KiB. The size of our own was set to 64KiB
- * independent of the device. If this is a problem, we need figure out
- * together with Google if there is a way in which our configs can coexist.
- *
- * Both breakpad and crashpad are way more defensive in the setup of their
- * signal stacks and take existing stacks into account (or reuse them).
- */
-#define SIGNAL_DEF(Sig, Desc)                                                  \
-    {                                                                          \
-        Sig, #Sig, Desc                                                        \
-    }
+#define SIGNAL_DEF(Sig, Desc) { Sig, #Sig, Desc }
 
 #define MAX_FRAMES 128
 
@@ -111,9 +88,9 @@ startup_inproc_backend(
 
     // set up an alternate signal stack if noone defined one before
     stack_t old_sig_stack;
-    if (sigaltstack(NULL, &old_sig_stack) == -1 || old_sig_stack.ss_sp == NULL
-        || old_sig_stack.ss_size == 0) {
-        SENTRY_TRACEF("installing signal stack (size: %d)", SIGNAL_STACK_SIZE);
+    int ret = sigaltstack(NULL, &old_sig_stack);
+    if (ret == 0 && old_sig_stack.ss_flags == SS_DISABLE) {
+        SENTRY_DEBUGF("installing signal stack (size: %d)", SIGNAL_STACK_SIZE);
         g_signal_stack.ss_sp = sentry_malloc(SIGNAL_STACK_SIZE);
         if (!g_signal_stack.ss_sp) {
             return 1;
@@ -121,9 +98,11 @@ startup_inproc_backend(
         g_signal_stack.ss_size = SIGNAL_STACK_SIZE;
         g_signal_stack.ss_flags = 0;
         sigaltstack(&g_signal_stack, 0);
-    } else {
-        SENTRY_TRACEF(
-            "using existing signal stack (size: %d)", old_sig_stack.ss_size);
+    } else if (ret == 0) {
+        SENTRY_DEBUGF("using existing signal stack (size: %d, flags: %d)",
+            old_sig_stack.ss_size, old_sig_stack.ss_flags);
+    } else if (ret == -1) {
+        SENTRY_WARNF("Failed to query signal stack size: %s", strerror(errno));
     }
 
     // install our own signal handler
@@ -207,8 +186,8 @@ shutdown_inproc_backend(sentry_backend_t *UNUSED(backend))
 
 #endif
 
-sentry_value_t
-sentry__registers_from_uctx(const sentry_ucontext_t *uctx)
+static sentry_value_t
+registers_from_uctx(const sentry_ucontext_t *uctx)
 {
     sentry_value_t registers = sentry_value_new_object();
 
@@ -415,7 +394,7 @@ sentry__registers_from_uctx(const sentry_ucontext_t *uctx)
 
 #    define SET_REG(name, prop)                                                \
         sentry_value_set_by_key(registers, name,                               \
-            sentry__value_new_addr((uint64_t)(size_t)ctx->prop));
+            sentry__value_new_addr((uint64_t)(size_t)ctx->prop))
 
 #    if defined(_M_AMD64)
 
@@ -507,7 +486,7 @@ make_signal_event(
     void *backtrace[MAX_FRAMES];
     size_t frame_count
         = sentry_unwind_stack_from_ucontext(uctx, &backtrace[0], MAX_FRAMES);
-    SENTRY_TRACEF(
+    SENTRY_DEBUGF(
         "captured backtrace from ucontext with %lu frames", frame_count);
     // if unwinding from a ucontext didn't yield any results, try again with a
     // direct unwind. this is most likely the case when using `libbacktrace`,
@@ -515,12 +494,12 @@ make_signal_event(
     if (!frame_count) {
         frame_count = sentry_unwind_stack(NULL, &backtrace[0], MAX_FRAMES);
     }
-    SENTRY_TRACEF("captured backtrace with %lu frames", frame_count);
+    SENTRY_DEBUGF("captured backtrace with %lu frames", frame_count);
 
     sentry_value_t stacktrace
         = sentry_value_new_stacktrace(&backtrace[0], frame_count);
 
-    sentry_value_t registers = sentry__registers_from_uctx(uctx);
+    sentry_value_t registers = registers_from_uctx(uctx);
     sentry_value_set_by_key(stacktrace, "registers", registers);
 
 #ifdef SENTRY_WITH_UNWINDER_LIBUNWINDSTACK
@@ -540,7 +519,7 @@ make_signal_event(
 static void
 handle_ucontext(const sentry_ucontext_t *uctx)
 {
-    SENTRY_DEBUG("entering signal handler");
+    SENTRY_INFO("entering signal handler");
 
     const struct signal_slot *sig_slot = NULL;
     for (int i = 0; i < SIGNAL_COUNT; ++i) {
@@ -557,24 +536,50 @@ handle_ucontext(const sentry_ucontext_t *uctx)
     }
 
 #ifdef SENTRY_PLATFORM_UNIX
-    // give us an allocator we can use safely in signals before we tear down.
-    sentry__page_allocator_enable();
-
     // inform the sentry_sync system that we're in a signal handler.  This will
     // make mutexes spin on a spinlock instead as it's no longer safe to use a
     // pthread mutex.
     sentry__enter_signal_handler();
 #endif
 
-    sentry_value_t event = make_signal_event(sig_slot, uctx);
-
     SENTRY_WITH_OPTIONS (options) {
+#ifdef SENTRY_PLATFORM_LINUX
+        // On Linux (and thus Android) CLR/Mono converts signals provoked by
+        // AOT/JIT-generated native code into managed code exceptions. In these
+        // cases, we shouldn't react to the signal at all and let their handler
+        // discontinue the signal chain by invoking the runtime handler before
+        // we process the signal.
+        if (sentry_options_get_handler_strategy(options)
+            == SENTRY_HANDLER_STRATEGY_CHAIN_AT_START) {
+            SENTRY_DEBUG("defer to runtime signal handler at start");
+            // there is a good chance that we won't return from the previous
+            // handler and that would mean we couldn't enter this handler with
+            // the next signal coming in if we didn't "leave" here.
+            sentry__leave_signal_handler();
+
+            // invoke the previous handler (typically the CLR/Mono
+            // signal-to-managed-exception handler)
+            invoke_signal_handler(
+                uctx->signum, uctx->siginfo, (void *)uctx->user_context);
+
+            // let's re-enter because it means this was an actual native crash
+            sentry__enter_signal_handler();
+            SENTRY_DEBUG(
+                "return from runtime signal handler, we handle the signal");
+        }
+#endif
+
+#ifdef SENTRY_PLATFORM_UNIX
+        // use a signal-safe allocator before we tear down.
+        sentry__page_allocator_enable();
+#endif
+
+        sentry_value_t event = make_signal_event(sig_slot, uctx);
+        bool should_handle = true;
         sentry__write_crash_marker(options);
 
-        bool should_handle = true;
-
         if (options->on_crash_func) {
-            SENTRY_TRACE("invoking `on_crash` hook");
+            SENTRY_DEBUG("invoking `on_crash` hook");
             event = options->on_crash_func(uctx, event, options->on_crash_data);
             should_handle = !sentry_value_is_null(event);
         }
@@ -583,11 +588,21 @@ handle_ucontext(const sentry_ucontext_t *uctx)
             sentry_envelope_t *envelope = sentry__prepare_event(
                 options, event, NULL, !options->on_crash_func);
             // TODO(tracing): Revisit when investigating transaction flushing
-            // during hard crashes.
+            //                during hard crashes.
 
             sentry_session_t *session = sentry__end_current_session_with_status(
                 SENTRY_SESSION_STATUS_CRASHED);
             sentry__envelope_add_session(envelope, session);
+
+            if (options->attach_screenshot) {
+                sentry_path_t *screenshot_path
+                    = sentry__screenshot_get_path(options);
+                if (sentry__screenshot_capture(screenshot_path)) {
+                    sentry__envelope_add_attachment(
+                        envelope, screenshot_path, NULL);
+                }
+                sentry__path_free(screenshot_path);
+            }
 
             // capture the envelope with the disk transport
             sentry_transport_t *disk_transport
@@ -596,7 +611,7 @@ handle_ucontext(const sentry_ucontext_t *uctx)
             sentry__transport_dump_queue(disk_transport, options->run);
             sentry_transport_free(disk_transport);
         } else {
-            SENTRY_TRACE("event was discarded by the `on_crash` hook");
+            SENTRY_DEBUG("event was discarded by the `on_crash` hook");
             sentry_value_decref(event);
         }
 
@@ -604,7 +619,7 @@ handle_ucontext(const sentry_ucontext_t *uctx)
         sentry__transport_dump_queue(options->transport, options->run);
     }
 
-    SENTRY_DEBUG("crash has been captured");
+    SENTRY_INFO("crash has been captured");
 
 #ifdef SENTRY_PLATFORM_UNIX
     // reset signal handlers and invoke the original ones.  This will then tear

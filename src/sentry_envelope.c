@@ -346,6 +346,32 @@ sentry__envelope_add_session(
 }
 
 sentry_envelope_item_t *
+sentry__envelope_add_attachment(sentry_envelope_t *envelope,
+    const sentry_path_t *attachment, const char *type)
+{
+    if (!envelope || !attachment) {
+        return NULL;
+    }
+
+    sentry_envelope_item_t *item
+        = sentry__envelope_add_from_path(envelope, attachment, "attachment");
+    if (type) {
+        sentry__envelope_item_set_header(
+            item, "attachment_type", sentry_value_new_string(type));
+    }
+
+    sentry__envelope_item_set_header(item, "filename",
+#ifdef SENTRY_PLATFORM_WINDOWS
+        sentry__value_new_string_from_wstr(
+#else
+        sentry_value_new_string(
+#endif
+            sentry__path_filename(attachment)));
+
+    return item;
+}
+
+sentry_envelope_item_t *
 sentry__envelope_add_from_buffer(sentry_envelope_t *envelope, const char *buf,
     size_t buf_len, const char *type)
 {
@@ -413,7 +439,7 @@ sentry__envelope_serialize_into_stringbuilder(
         return;
     }
 
-    SENTRY_TRACE("serializing envelope into buffer");
+    SENTRY_DEBUG("serializing envelope into buffer");
     sentry__envelope_serialize_headers_into_stringbuilder(envelope, sb);
 
     for (size_t i = 0; i < envelope->contents.items.item_count; i++) {

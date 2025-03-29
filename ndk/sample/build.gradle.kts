@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "io.sentry.ndk.sample"
-        minSdk = 19
+        minSdk = 21
         targetSdk = 34
         versionCode = 2
         versionName = project.version.toString()
@@ -47,15 +47,17 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("debug") // to be able to run release mode
             isShrinkResources = true
 
             addManifestPlaceholders(
                 mapOf(
-                    "sentryDebug" to false, "sentryEnvironment" to "release"
-                )
+                    "sentryDebug" to false,
+                    "sentryEnvironment" to "release",
+                ),
             )
         }
     }

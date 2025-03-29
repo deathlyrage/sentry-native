@@ -149,6 +149,19 @@ Java_io_sentry_ndk_NativeScope_nativeRemoveUser(JNIEnv *env, jclass cls) {
 }
 
 JNIEXPORT void JNICALL
+Java_io_sentry_ndk_NativeScope_nativeSetTrace(
+    JNIEnv *env, jclass cls, jstring trace_id, jstring parent_span_id) {
+    const char *charTraceId = (*env)->GetStringUTFChars(env, trace_id, 0);
+    const char *charParentSpanId
+        = (*env)->GetStringUTFChars(env, parent_span_id, 0);
+
+    sentry_set_trace(charTraceId, charParentSpanId);
+
+    (*env)->ReleaseStringUTFChars(env, trace_id, charTraceId);
+    (*env)->ReleaseStringUTFChars(env, parent_span_id, charParentSpanId);
+}
+
+JNIEXPORT void JNICALL
 Java_io_sentry_ndk_NativeScope_nativeAddBreadcrumb(
         JNIEnv *env,
         jclass cls,
@@ -253,6 +266,10 @@ Java_io_sentry_ndk_SentryNdk_initSentryNative(
     jmethodID native_sdk_name_mid = (*env)->GetMethodID(env, options_cls, "getSdkName",
                                                         "()Ljava/lang/String;");
 
+    jmethodID handler_strategy_mid = (*env)->GetMethodID(env, options_cls, "getNdkHandlerStrategy", "()I");
+
+    jmethodID traces_sample_rate_mid = (*env)->GetMethodID(env, options_cls, "getTracesSampleRate", "()F");
+
     (*env)->DeleteLocalRef(env, options_cls);
 
     char *outbox_path = NULL;
@@ -331,6 +348,12 @@ Java_io_sentry_ndk_SentryNdk_initSentryNative(
         sentry_options_set_sdk_name(options, native_sdk_name_str);
         sentry_free(native_sdk_name_str);
     }
+
+    jint handler_strategy = (jint) (*env)->CallIntMethod(env, sentry_ndk_options, handler_strategy_mid);
+    sentry_options_set_handler_strategy(options, handler_strategy);
+
+    jfloat traces_sample_rate = (jfloat) (*env)->CallFloatMethod(env, sentry_ndk_options, traces_sample_rate_mid);
+    sentry_options_set_traces_sample_rate(options, traces_sample_rate);
 
     sentry_init(options);
     return;
