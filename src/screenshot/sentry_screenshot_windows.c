@@ -110,6 +110,10 @@ save_bitmap(HBITMAP bitmap, const wchar_t *path)
 static void
 calculate_region(DWORD pid, HRGN region)
 {
+#ifdef SENTRY_PLATFORM_XBOX
+    (DWORD) pid;
+    (HRGN) region;
+#else
     HMODULE dwmapi = load_library(L"dwmapi.dll");
     if (!dwmapi) {
         return;
@@ -141,11 +145,16 @@ calculate_region(DWORD pid, HRGN region)
         }
         hwnd = GetWindow(hwnd, GW_HWNDPREV);
     }
+#endif // SENTRY_PLATFORM_XBOX
 }
 
 bool
 sentry__screenshot_capture(const sentry_path_t *path)
 {
+#ifdef SENTRY_PLATFORM_XBOX
+    (sentry_path_t *)path;
+    return false;
+#else
     HRGN region = CreateRectRgn(0, 0, 0, 0);
     calculate_region(GetCurrentProcessId(), region);
 
@@ -180,4 +189,5 @@ sentry__screenshot_capture(const sentry_path_t *path)
     ReleaseDC(NULL, src);
     DeleteObject(region);
     return rv;
+#endif // SENTRY_PLATFORM_XBOX
 }

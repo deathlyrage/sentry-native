@@ -5,9 +5,11 @@
 #include "sentry_options.h"
 #include "sentry_path.h"
 #include "sentry_ratelimiter.h"
+#include "sentry_scope.h"
 #include "sentry_string.h"
 #include "sentry_transport.h"
 #include "sentry_value.h"
+#include <assert.h>
 #include <string.h>
 
 struct sentry_envelope_item_s {
@@ -253,6 +255,57 @@ sentry__envelope_add_event(sentry_envelope_t *envelope, sentry_value_t event)
     sentry_value_incref(event_id);
     sentry__envelope_set_header(envelope, "event_id", event_id);
 
+    double traces_sample_rate = 0.0;
+    SENTRY_WITH_OPTIONS (options) {
+        traces_sample_rate = options->traces_sample_rate;
+    }
+    sentry_value_t dsc = sentry_value_new_null();
+    sentry_value_t sample_rand = sentry_value_new_null();
+    SENTRY_WITH_SCOPE (scope) {
+        dsc = sentry__value_clone(scope->dynamic_sampling_context);
+        sample_rand = sentry_value_get_by_key(
+            sentry_value_get_by_key(scope->propagation_context, "trace"),
+            "sample_rand");
+    }
+    if (!sentry_value_is_null(dsc)) {
+        sentry_value_t trace_id = sentry_value_get_by_key(
+            sentry_value_get_by_key(
+                sentry_value_get_by_key(event, "contexts"), "trace"),
+            "trace_id");
+        if (!sentry_value_is_null(trace_id)) {
+            sentry_value_incref(trace_id);
+            sentry_value_set_by_key(dsc, "trace_id", trace_id);
+        } else {
+            SENTRY_WARN("couldn't retrieve trace_id from scope to apply to the "
+                        "dynamic sampling context");
+        }
+        if (!sentry_value_is_null(sample_rand)) {
+            if (sentry_value_as_double(sample_rand) >= traces_sample_rate) {
+                sentry_value_set_by_key(
+                    dsc, "sampled", sentry_value_new_string("false"));
+            } else {
+                sentry_value_set_by_key(
+                    dsc, "sampled", sentry_value_new_string("true"));
+            }
+        } else {
+            // only for testing; in production, the SDK should always have a
+            // non-null sample_rand. We don't set "sampled" to keep dsc empty
+            SENTRY_WARN("couldn't retrieve sample_rand from scope to apply to "
+                        "the dynamic sampling context");
+        }
+        // only add dsc if it has values
+        if (sentry_value_is_true(dsc)) {
+#ifdef SENTRY_UNITTEST
+            // to make comparing the header feasible in unit tests
+            sentry_value_set_by_key(dsc, "sample_rand",
+                sentry_value_new_double(0.01006918276309107));
+#endif
+            sentry__envelope_set_header(envelope, "trace", dsc);
+        } else {
+            sentry_value_decref(dsc);
+        }
+    }
+
     return item;
 }
 
@@ -284,6 +337,40 @@ sentry__envelope_add_transaction(
     sentry_value_incref(event_id);
     sentry__envelope_set_header(envelope, "event_id", event_id);
 
+    sentry_value_t dsc = sentry_value_new_null();
+
+    SENTRY_WITH_SCOPE (scope) {
+        dsc = sentry__value_clone(scope->dynamic_sampling_context);
+    }
+
+    if (!sentry_value_is_null(dsc)) {
+        sentry_value_t trace_id = sentry_value_get_by_key(
+            sentry_value_get_by_key(
+                sentry_value_get_by_key(transaction, "contexts"), "trace"),
+            "trace_id");
+        if (!sentry_value_is_null(trace_id)) {
+            sentry_value_incref(trace_id);
+            sentry_value_set_by_key(dsc, "trace_id", trace_id);
+            sentry_value_set_by_key(
+                dsc, "sampled", sentry_value_new_string("true"));
+        } else {
+            SENTRY_WARN("couldn't retrieve trace_id in transaction's trace "
+                        "context to apply to the dynamic sampling context");
+        }
+        sentry_value_t transaction_name
+            = sentry_value_get_by_key(transaction, "transaction");
+        if (!sentry_value_is_null(transaction_name)) {
+            sentry_value_incref(transaction_name);
+            sentry_value_set_by_key(dsc, "transaction", transaction_name);
+        }
+        // only add dsc if it has values
+        if (sentry_value_is_true(dsc)) {
+            sentry__envelope_set_header(envelope, "trace", dsc);
+        } else {
+            sentry_value_decref(dsc);
+        }
+    }
+
 #ifdef SENTRY_UNITTEST
     sentry_value_t now = sentry_value_new_string("2021-12-16T05:53:59.343Z");
 #else
@@ -296,8 +383,8 @@ sentry__envelope_add_transaction(
 }
 
 sentry_envelope_item_t *
-sentry__envelope_add_user_feedback(
-    sentry_envelope_t *envelope, sentry_value_t user_feedback)
+sentry__envelope_add_user_report(
+    sentry_envelope_t *envelope, sentry_value_t user_report)
 {
     sentry_envelope_item_t *item = envelope_add_item(envelope);
     if (!item) {
@@ -309,9 +396,9 @@ sentry__envelope_add_user_feedback(
         return NULL;
     }
 
-    sentry_value_t event_id = sentry__ensure_event_id(user_feedback, NULL);
+    sentry_value_t event_id = sentry__ensure_event_id(user_report, NULL);
 
-    sentry__jsonwriter_write_value(jw, user_feedback);
+    sentry__jsonwriter_write_value(jw, user_report);
     item->payload = sentry__jsonwriter_into_string(jw, &item->payload_len);
 
     sentry__envelope_item_set_header(
@@ -321,6 +408,30 @@ sentry__envelope_add_user_feedback(
 
     sentry_value_incref(event_id);
     sentry__envelope_set_header(envelope, "event_id", event_id);
+
+    return item;
+}
+
+sentry_envelope_item_t *
+sentry__envelope_add_user_feedback(
+    sentry_envelope_t *envelope, sentry_value_t user_feedback)
+{
+    sentry_value_t event = sentry_value_new_event();
+    sentry_value_t contexts = sentry_value_get_by_key(event, "contexts");
+    if (sentry_value_is_null(contexts)) {
+        contexts = sentry_value_new_object();
+    }
+    sentry_value_set_by_key(contexts, "feedback", user_feedback);
+    sentry_value_set_by_key(event, "contexts", contexts);
+
+    sentry_envelope_item_t *item = sentry__envelope_add_event(envelope, event);
+    if (!item) {
+        sentry_value_decref(event);
+        return NULL;
+    }
+
+    sentry__envelope_item_set_header(
+        item, "type", sentry_value_new_string("feedback"));
 
     return item;
 }
@@ -345,30 +456,75 @@ sentry__envelope_add_session(
         envelope, payload, payload_len, "session");
 }
 
+static const char *
+str_from_attachment_type(sentry_attachment_type_t attachment_type)
+{
+    switch (attachment_type) {
+    case ATTACHMENT:
+        return "event.attachment";
+    case MINIDUMP:
+        return "event.minidump";
+    case VIEW_HIERARCHY:
+        return "event.view_hierarchy";
+    default:
+        UNREACHABLE("Unknown attachment type");
+        return "event.attachment";
+    }
+}
+
 sentry_envelope_item_t *
-sentry__envelope_add_attachment(sentry_envelope_t *envelope,
-    const sentry_path_t *attachment, const char *type)
+sentry__envelope_add_attachment(
+    sentry_envelope_t *envelope, const sentry_attachment_t *attachment)
 {
     if (!envelope || !attachment) {
         return NULL;
     }
 
-    sentry_envelope_item_t *item
-        = sentry__envelope_add_from_path(envelope, attachment, "attachment");
-    if (type) {
-        sentry__envelope_item_set_header(
-            item, "attachment_type", sentry_value_new_string(type));
+    sentry_envelope_item_t *item = NULL;
+    if (attachment->buf) {
+        item = sentry__envelope_add_from_buffer(
+            envelope, attachment->buf, attachment->buf_len, "attachment");
+    } else {
+        item = sentry__envelope_add_from_path(
+            envelope, attachment->path, "attachment");
     }
-
+    if (!item) {
+        return NULL;
+    }
+    if (attachment->type != ATTACHMENT) { // don't need to set the default
+        sentry__envelope_item_set_header(item, "attachment_type",
+            sentry_value_new_string(
+                str_from_attachment_type(attachment->type)));
+    }
+    if (attachment->content_type) {
+        sentry__envelope_item_set_header(item, "content_type",
+            sentry_value_new_string(attachment->content_type));
+    }
     sentry__envelope_item_set_header(item, "filename",
 #ifdef SENTRY_PLATFORM_WINDOWS
         sentry__value_new_string_from_wstr(
 #else
         sentry_value_new_string(
 #endif
-            sentry__path_filename(attachment)));
+            sentry__path_filename(attachment->filename ? attachment->filename
+                                                       : attachment->path)));
 
     return item;
+}
+
+void
+sentry__envelope_add_attachments(
+    sentry_envelope_t *envelope, const sentry_attachment_t *attachments)
+{
+    if (!envelope || !attachments) {
+        return;
+    }
+
+    SENTRY_DEBUG("adding attachments to envelope");
+    for (const sentry_attachment_t *attachment = attachments; attachment;
+        attachment = attachment->next) {
+        sentry__envelope_add_attachment(envelope, attachment);
+    }
 }
 
 sentry_envelope_item_t *
@@ -494,7 +650,9 @@ sentry_envelope_serialize(const sentry_envelope_t *envelope, size_t *size_out)
 
     sentry__envelope_serialize_into_stringbuilder(envelope, &sb);
 
-    *size_out = sentry__stringbuilder_len(&sb);
+    if (size_out) {
+        *size_out = sentry__stringbuilder_len(&sb);
+    }
     return sentry__stringbuilder_into_string(&sb);
 }
 
@@ -508,9 +666,10 @@ sentry_envelope_write_to_path(
     }
 
     if (envelope->is_raw) {
-        return envelope->contents.raw.payload_len
-            != sentry__filewriter_write(fw, envelope->contents.raw.payload,
-                envelope->contents.raw.payload_len);
+        size_t rv = sentry__filewriter_write(fw, envelope->contents.raw.payload,
+            envelope->contents.raw.payload_len);
+        sentry__filewriter_free(fw);
+        return rv != 0;
     }
 
     sentry_jsonwriter_t *jw = sentry__jsonwriter_new_fw(fw);

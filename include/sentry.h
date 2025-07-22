@@ -13,6 +13,17 @@
  * encoding, typically ANSI on Windows, UTF-8 macOS, and the locale encoding on
  * Linux; and they provide wchar-compatible alternatives on Windows which are
  * preferred.
+ *
+ * NOTE on attachments:
+ *
+ * Attachments are read lazily at the time of `sentry_capture_event`,
+ * `sentry_capture_event_with_scope`, or at time of a hard crash. Relative
+ * attachment paths will be resolved according to the current working directory
+ * at the time of envelope creation. When adding and removing attachments, they
+ * are matched according to their given `path`. No normalization is performed.
+ * When using the `crashpad` backend on macOS, the list of attachments that will
+ * be added at the time of a hard crash will be frozen at the time of
+ * `sentry_init`, and later modifications will not be reflected.
  */
 
 #ifndef SENTRY_H_INCLUDED
@@ -22,20 +33,12 @@
 extern "C" {
 #endif
 
-/* SDK Version */
-#ifndef SENTRY_SDK_NAME
-#    ifdef __ANDROID__
-#        define SENTRY_SDK_NAME "sentry.native.android"
-#    else
-#        define SENTRY_SDK_NAME "sentry.native"
-#    endif
-#endif
-#define SENTRY_SDK_VERSION "0.8.3"
-#define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
-
 /* common platform detection */
 #ifdef _WIN32
 #    define SENTRY_PLATFORM_WINDOWS
+#    ifdef _GAMING_XBOX
+#        define SENTRY_PLATFORM_XBOX
+#    endif
 #elif defined(__APPLE__)
 #    include <TargetConditionals.h>
 #    if defined(TARGET_OS_OSX) && TARGET_OS_OSX
@@ -49,6 +52,9 @@ extern "C" {
 #    define SENTRY_PLATFORM_ANDROID
 #    define SENTRY_PLATFORM_LINUX
 #    define SENTRY_PLATFORM_UNIX
+#elif defined(__PROSPERO__)
+#    define SENTRY_PLATFORM_PS
+#    define SENTRY_PLATFORM_UNIX
 #elif defined(__linux) || defined(__linux__)
 #    define SENTRY_PLATFORM_LINUX
 #    define SENTRY_PLATFORM_UNIX
@@ -61,6 +67,19 @@ extern "C" {
 #else
 #    error unsupported platform
 #endif
+
+/* SDK Version */
+#ifndef SENTRY_SDK_NAME
+#    if defined(SENTRY_PLATFORM_ANDROID)
+#        define SENTRY_SDK_NAME "sentry.native.android"
+#    elif defined(SENTRY_PLATFORM_XBOX)
+#        define SENTRY_SDK_NAME "sentry.native.xbox"
+#    else
+#        define SENTRY_SDK_NAME "sentry.native"
+#    endif
+#endif
+#define SENTRY_SDK_VERSION "0.9.1"
+#define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
 /* marks a function as part of the sentry API */
 #ifndef SENTRY_API
@@ -81,6 +100,40 @@ extern "C" {
 #    endif
 #endif
 
+#ifdef __has_attribute
+#    if __has_attribute(deprecated)
+#        define SENTRY_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#    endif
+#endif
+#ifndef SENTRY_DEPRECATED
+#    if defined(__GNUC__)                                                      \
+        && (__GNUC__ > 4                                                       \
+            || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)) /* GCC 4.5 */
+#        define SENTRY_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#    elif defined(__clang__) && __clang__major__ >= 3 /* Clang 3.0 */
+#        define SENTRY_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#    elif defined(_MSC_VER) && _MSC_VER >= 1400 /* VS 2005 (8.0) */
+#        define SENTRY_DEPRECATED(msg) __declspec(deprecated(msg))
+#    else
+#        define SENTRY_DEPRECATED(msg)
+#    endif
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#    define SENTRY_SUPPRESS_DEPRECATED                                         \
+        _Pragma("GCC diagnostic push");                                        \
+        _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#    define SENTRY_RESTORE_DEPRECATED _Pragma("GCC diagnostic pop")
+#elif defined(_MSC_VER)
+#    define SENTRY_SUPPRESS_DEPRECATED                                         \
+        __pragma(warning(push));                                               \
+        __pragma(warning(disable : 4996))
+#    define SENTRY_RESTORE_DEPRECATED __pragma(warning(pop))
+#else
+#    define SENTRY_SUPPRESS_DEPRECATED
+#    define SENTRY_RESTORE_DEPRECATED
+#endif
+
 /* marks a function as experimental api */
 #ifndef SENTRY_EXPERIMENTAL_API
 #    define SENTRY_EXPERIMENTAL_API SENTRY_API
@@ -93,6 +146,8 @@ extern "C" {
 /* context type dependencies */
 #ifdef _WIN32
 #    include <windows.h>
+#elif defined(SENTRY_PLATFORM_PS)
+#    include <sys/signal.h>
 #else
 #    include <signal.h>
 #endif
@@ -221,6 +276,18 @@ SENTRY_API sentry_value_t sentry_value_new_list(void);
  * Creates a new object.
  */
 SENTRY_API sentry_value_t sentry_value_new_object(void);
+/**
+ * Creates a new user object.
+ * Will return a sentry_value_new_null if all parameters are null.
+ *
+ * This DOES NOT set the user object, this should still be done with
+ * sentry_set_user(), passing the return of this function as a parameter
+ */
+SENTRY_API sentry_value_t sentry_value_new_user(const char *id,
+    const char *username, const char *email, const char *ip_address);
+SENTRY_API sentry_value_t sentry_value_new_user_n(const char *id, size_t id_len,
+    const char *username, size_t username_len, const char *email,
+    size_t email_len, const char *ip_address, size_t ip_address_len);
 
 /**
  * Returns the type of the value passed.
@@ -482,13 +549,13 @@ SENTRY_EXPERIMENTAL_API char *sentry_value_to_msgpack(
  * Adds a stack trace to an event.
  *
  * The stack trace is added as part of a new thread object.
- * This function is **deprecated** in favor of using
- * `sentry_value_new_stacktrace` in combination with `sentry_value_new_thread`
- * and `sentry_event_add_thread`.
  *
  * If `ips` is NULL the current stack trace is captured, otherwise `len`
  * stack trace instruction pointers are attached to the event.
  */
+SENTRY_DEPRECATED(
+    "Use `sentry_value_new_stacktrace` in combination with "
+    "`sentry_value_new_thread` and `sentry_event_add_thread` instead")
 SENTRY_EXPERIMENTAL_API void sentry_event_value_add_stacktrace(
     sentry_value_t event, void **ips, size_t len);
 
@@ -499,6 +566,8 @@ SENTRY_EXPERIMENTAL_API void sentry_event_value_add_stacktrace(
 typedef struct sentry_ucontext_s {
 #ifdef _WIN32
     EXCEPTION_POINTERS exception_ptrs;
+#elif defined(SENTRY_PLATFORM_PS)
+    int data;
 #else
     int signum;
     siginfo_t *siginfo;
@@ -737,11 +806,8 @@ SENTRY_API void sentry_transport_free(sentry_transport_t *transport);
  * It is a convenience function which works with a borrowed `data`, and will
  * automatically free the envelope, so the user provided function does not need
  * to do that.
- *
- * This function is *deprecated* and will be removed in a future version.
- * It is here for backwards compatibility. Users should migrate to the
- * `sentry_transport_new` API.
  */
+SENTRY_DEPRECATED("Use `sentry_transport_new` instead")
 SENTRY_API sentry_transport_t *sentry_new_function_transport(
     void (*func)(const sentry_envelope_t *envelope, void *data), void *data);
 
@@ -795,6 +861,22 @@ SENTRY_API void sentry_options_free(sentry_options_t *opts);
 SENTRY_API void sentry_options_set_transport(
     sentry_options_t *opts, sentry_transport_t *transport);
 
+#ifdef SENTRY_PLATFORM_NX
+/**
+ * Function to start a network connection.
+ * This is called on a background thread so it must be thread-safe.
+ */
+SENTRY_API void sentry_options_set_network_connect_func(
+    sentry_options_t *opts, void (*network_connect_func)(void));
+
+/**
+ * If false (the default), the SDK won't add PII or other sensitive data to the
+ * payload. For example, a pseudo-random identifier combining device and app ID.
+ */
+SENTRY_API void sentry_options_set_send_default_pii(
+    sentry_options_t *opts, int value);
+#endif
+
 /**
  * Type of the `before_send` callback.
  *
@@ -827,7 +909,7 @@ SENTRY_API void sentry_options_set_transport(
  * sent.
  */
 typedef sentry_value_t (*sentry_event_function_t)(
-    sentry_value_t event, void *hint, void *closure);
+    sentry_value_t event, void *hint, void *user_data);
 
 /**
  * Sets the `before_send` callback.
@@ -835,7 +917,7 @@ typedef sentry_value_t (*sentry_event_function_t)(
  * See the `sentry_event_function_t` typedef above for more information.
  */
 SENTRY_API void sentry_options_set_before_send(
-    sentry_options_t *opts, sentry_event_function_t func, void *data);
+    sentry_options_t *opts, sentry_event_function_t func, void *user_data);
 
 /**
  * Type of the `on_crash` callback.
@@ -888,7 +970,7 @@ SENTRY_API void sentry_options_set_before_send(
  * sent.
  */
 typedef sentry_value_t (*sentry_crash_function_t)(
-    const sentry_ucontext_t *uctx, sentry_value_t event, void *closure);
+    const sentry_ucontext_t *uctx, sentry_value_t event, void *user_data);
 
 /**
  * Sets the `on_crash` callback.
@@ -1002,13 +1084,13 @@ SENTRY_API const char *sentry_options_get_proxy(const sentry_options_t *opts);
 /**
  * Configures the proxy.
  *
- * This is a **deprecated** alias for `sentry_options_set_proxy(_n)`.
- *
  * The given proxy has to include the full scheme,
  * eg. `http://some.proxy/.
  */
+SENTRY_DEPRECATED("Use `sentry_options_set_proxy` instead")
 SENTRY_API void sentry_options_set_http_proxy(
     sentry_options_t *opts, const char *proxy);
+SENTRY_DEPRECATED("Use `sentry_options_set_proxy_n` instead")
 SENTRY_API void sentry_options_set_http_proxy_n(
     sentry_options_t *opts, const char *proxy, size_t proxy_len);
 
@@ -1180,10 +1262,28 @@ SENTRY_API int sentry_options_get_symbolize_stacktraces(
  * `path` is assumed to be in platform-specific filesystem path encoding.
  * API Users on windows are encouraged to use `sentry_options_add_attachmentw`
  * instead.
+ *
+ * See the NOTE on attachments above for restrictions of this API.
  */
 SENTRY_API void sentry_options_add_attachment(
     sentry_options_t *opts, const char *path);
 SENTRY_API void sentry_options_add_attachment_n(
+    sentry_options_t *opts, const char *path, size_t path_len);
+
+/**
+ * Adds a new view hierarchy attachment to be sent along.
+ *
+ * The primary use-case is for downstream SDKs (like sentry-godot). The
+ * view-hierarchy.json file should follow the representation defined in RFC#33
+ * https://github.com/getsentry/rfcs/blob/main/text/0033-view-hierarchy.md
+ *
+ * `path` is assumed to be in platform-specific filesystem path encoding.
+ * API Users on windows are encouraged to use
+ * `sentry_options_add_view_hierarchyw` instead.
+ */
+SENTRY_API void sentry_options_add_view_hierarchy(
+    sentry_options_t *opts, const char *path);
+SENTRY_API void sentry_options_add_view_hierarchy_n(
     sentry_options_t *opts, const char *path, size_t path_len);
 
 /**
@@ -1260,6 +1360,14 @@ SENTRY_API void sentry_options_add_attachmentw_n(
     sentry_options_t *opts, const wchar_t *path, size_t path_len);
 
 /**
+ * Wide char version of `sentry_options_add_view_hierarchy`.
+ */
+SENTRY_API void sentry_options_add_view_hierarchyw(
+    sentry_options_t *opts, const wchar_t *path);
+SENTRY_API void sentry_options_add_view_hierarchyw_n(
+    sentry_options_t *opts, const wchar_t *path, size_t path_len);
+
+/**
  * Wide char version of `sentry_options_set_handler_path`.
  */
 SENTRY_API void sentry_options_set_handler_pathw(
@@ -1274,6 +1382,30 @@ SENTRY_API void sentry_options_set_database_pathw(
     sentry_options_t *opts, const wchar_t *path);
 SENTRY_API void sentry_options_set_database_pathw_n(
     sentry_options_t *opts, const wchar_t *path, size_t path_len);
+
+/**
+ * Allows users to define a thread stack guarantee manually on each thread. This
+ * is necessary for crash handlers to run after a thread crashed due to a
+ * stack-overflow on Windows.
+ *
+ * By default the Native SDK automatically sets this value for you, but in some
+ * cases it might be preferable to set these values yourself for each thread you
+ * manage. Ensure to disable the `SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT` CMake
+ * option when building the Native SDK to have full control over each threads
+ * stack guarantee.
+ *
+ * The input parameter specifies a size in bytes and should be a multiple of the
+ * page size. Returns `1` if the thread stack guarantee was set successfully and
+ * `0` otherwise.
+ *
+ * Note: when we auto-assign the stack guarantee we check against the thread's
+ * stack reserve (see `SENTRY_THREAD_STACK_GUARANTEE_FACTOR` in the
+ * `README.md`). This check is not applied when you call this function.
+ * Note: this function depends on the SDK being initialized when doing static
+ * builds or in any configuration on Xbox.
+ */
+SENTRY_EXPERIMENTAL_API int sentry_set_thread_stack_guarantee(
+    uint32_t stack_guarantee_in_bytes);
 #endif
 
 /**
@@ -1291,7 +1423,8 @@ SENTRY_API void sentry_options_set_system_crash_reporter_enabled(
  * Enables a wait for the crash report upload to be finished before shutting
  * down. This is disabled by default.
  *
- * This setting only has an effect when using the `crashpad` backend on Linux.
+ * This setting only has an effect when using the `crashpad` backend on Linux
+ * and Windows.
  */
 SENTRY_API void sentry_options_set_crashpad_wait_for_upload(
     sentry_options_t *opts, int wait_for_upload);
@@ -1319,7 +1452,7 @@ SENTRY_API uint64_t sentry_options_get_shutdown_timeout(sentry_options_t *opts);
 SENTRY_API void sentry_options_set_backend(
     sentry_options_t *opts, sentry_backend_t *backend);
 
-/* -- Global APIs -- */
+/* -- Global/Scope APIs -- */
 
 /**
  * Initializes the Sentry SDK with the specified options.
@@ -1363,10 +1496,9 @@ SENTRY_API int sentry_close(void);
 /**
  * Shuts down the sentry client and forces transports to flush out.
  *
- * This is a **deprecated** alias for `sentry_close`.
- *
  * Returns 0 on success.
  */
+SENTRY_DEPRECATED("Use `sentry_close` instead")
 SENTRY_API int sentry_shutdown(void);
 
 /**
@@ -1420,6 +1552,19 @@ SENTRY_API void sentry_user_consent_reset(void);
 SENTRY_API sentry_user_consent_t sentry_user_consent_get(void);
 
 /**
+ * A sentry Scope.
+ *
+ * See https://develop.sentry.dev/sdk/telemetry/scopes/
+ */
+struct sentry_scope_s;
+typedef struct sentry_scope_s sentry_scope_t;
+
+/**
+ * Creates a local scope.
+ */
+SENTRY_API sentry_scope_t *sentry_local_scope_new(void);
+
+/**
  * Sends a sentry event.
  *
  * If returns a nil UUID if the event being passed in is a transaction, and the
@@ -1427,6 +1572,14 @@ SENTRY_API sentry_user_consent_t sentry_user_consent_get(void);
  * be used to send transactions.
  */
 SENTRY_API sentry_uuid_t sentry_capture_event(sentry_value_t event);
+
+/**
+ * Sends a sentry event with a local scope.
+ *
+ * Takes ownership of `scope`.
+ */
+SENTRY_API sentry_uuid_t sentry_capture_event_with_scope(
+    sentry_value_t event, sentry_scope_t *scope);
 
 /**
  * Allows capturing independently created minidumps.
@@ -1472,11 +1625,15 @@ SENTRY_EXPERIMENTAL_API void sentry_handle_exception(
  * Adds the breadcrumb to be sent in case of an event.
  */
 SENTRY_API void sentry_add_breadcrumb(sentry_value_t breadcrumb);
+SENTRY_API void sentry_scope_add_breadcrumb(
+    sentry_scope_t *scope, sentry_value_t breadcrumb);
 
 /**
  * Sets the specified user.
  */
 SENTRY_API void sentry_set_user(sentry_value_t user);
+SENTRY_API void sentry_scope_set_user(
+    sentry_scope_t *scope, sentry_value_t user);
 
 /**
  * Removes a user.
@@ -1489,6 +1646,10 @@ SENTRY_API void sentry_remove_user(void);
 SENTRY_API void sentry_set_tag(const char *key, const char *value);
 SENTRY_API void sentry_set_tag_n(
     const char *key, size_t key_len, const char *value, size_t value_len);
+SENTRY_API void sentry_scope_set_tag(
+    sentry_scope_t *scope, const char *key, const char *value);
+SENTRY_API void sentry_scope_set_tag_n(sentry_scope_t *scope, const char *key,
+    size_t key_len, const char *value, size_t value_len);
 
 /**
  * Removes the tag with the specified key.
@@ -1502,6 +1663,10 @@ SENTRY_API void sentry_remove_tag_n(const char *key, size_t key_len);
 SENTRY_API void sentry_set_extra(const char *key, sentry_value_t value);
 SENTRY_API void sentry_set_extra_n(
     const char *key, size_t key_len, sentry_value_t value);
+SENTRY_API void sentry_scope_set_extra(
+    sentry_scope_t *scope, const char *key, sentry_value_t value);
+SENTRY_API void sentry_scope_set_extra_n(sentry_scope_t *scope, const char *key,
+    size_t key_len, sentry_value_t value);
 
 /**
  * Removes the extra with the specified key.
@@ -1514,6 +1679,10 @@ SENTRY_API void sentry_remove_extra_n(const char *key, size_t key_len);
  */
 SENTRY_API void sentry_set_context(const char *key, sentry_value_t value);
 SENTRY_API void sentry_set_context_n(
+    const char *key, size_t key_len, sentry_value_t value);
+SENTRY_API void sentry_scope_set_context(
+    sentry_scope_t *scope, const char *key, sentry_value_t value);
+SENTRY_API void sentry_scope_set_context_n(sentry_scope_t *scope,
     const char *key, size_t key_len, sentry_value_t value);
 
 /**
@@ -1531,6 +1700,18 @@ SENTRY_API void sentry_remove_context_n(const char *key, size_t key_len);
 SENTRY_API void sentry_set_fingerprint(const char *fingerprint, ...);
 SENTRY_API void sentry_set_fingerprint_n(
     const char *fingerprint, size_t fingerprint_len, ...);
+SENTRY_API void sentry_scope_set_fingerprint(
+    sentry_scope_t *scope, const char *fingerprint, ...);
+SENTRY_API void sentry_scope_set_fingerprint_n(sentry_scope_t *scope,
+    const char *fingerprint, size_t fingerprint_len, ...);
+
+/**
+ * Sets the event fingerprints.
+ *
+ * This accepts a list of fingerprints created with `sentry_value_new_list`.
+ */
+SENTRY_API void sentry_scope_set_fingerprints(
+    sentry_scope_t *scope, sentry_value_t fingerprints);
 
 /**
  * Removes the fingerprint.
@@ -1539,12 +1720,19 @@ SENTRY_API void sentry_remove_fingerprint(void);
 
 /**
  * Set the trace. The primary use for this is to allow other SDKs to propagate
- * their trace context to connect events on all layers
+ * their trace context to connect events on all layers.
  */
 SENTRY_API void sentry_set_trace(
     const char *trace_id, const char *parent_span_id);
 SENTRY_API void sentry_set_trace_n(const char *trace_id, size_t trace_id_len,
     const char *parent_span_id, size_t parent_span_id_len);
+
+/**
+ * Generates a new random `trace_id` and `span_id` and sets these onto
+ * the propagation context. Use this to set a trace boundary for
+ * events/transactions.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_regenerate_trace(void);
 
 /**
  * Sets the transaction.
@@ -1557,6 +1745,8 @@ SENTRY_API void sentry_set_transaction_n(
  * Sets the event level.
  */
 SENTRY_API void sentry_set_level(sentry_level_t level);
+SENTRY_API void sentry_scope_set_level(
+    sentry_scope_t *scope, sentry_level_t level);
 
 /**
  * Sets the maximum number of spans that can be attached to a
@@ -1636,6 +1826,140 @@ SENTRY_EXPERIMENTAL_API void sentry_options_set_handler_strategy(
 
 #endif // SENTRY_PLATFORM_LINUX
 
+/**
+ * A sentry Attachment.
+ *
+ * See https://develop.sentry.dev/sdk/data-model/envelope-items/#attachment
+ */
+struct sentry_attachment_s;
+typedef struct sentry_attachment_s sentry_attachment_t;
+
+/**
+ * Attaches a file to be sent along with events.
+ *
+ * `path` is assumed to be in platform-specific filesystem path encoding.
+ * API Users on windows are encouraged to use `sentry_attach_filew` or
+ * `sentry_scope_attach_filew` instead.
+ *
+ * The same file cannot be attached multiple times i.e. `path` must be unique.
+ * Calling this function multiple times with the same `path` is safe, but
+ * duplicate attachments with equal paths will not be added.
+ *
+ * The returned `sentry_attachment_t` is owned by the SDK and will remain valid
+ * until the attachment is removed with `sentry_remove_attachment` or
+ * `sentry_close` is called.
+ *
+ * See the NOTE on attachments above for restrictions of this API.
+ */
+SENTRY_API sentry_attachment_t *sentry_attach_file(const char *path);
+SENTRY_API sentry_attachment_t *sentry_attach_file_n(
+    const char *path, size_t path_len);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_file(
+    sentry_scope_t *scope, const char *path);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_file_n(
+    sentry_scope_t *scope, const char *path, size_t path_len);
+
+/**
+ * Attaches bytes to be sent along with events.
+ *
+ * `filename` is assumed to be in platform-specific filesystem path encoding.
+ * API Users on windows are encouraged to use `sentry_attach_bytesw` or
+ * `sentry_scope_attach_bytesw` instead.
+ *
+ * `filename` is used to identify the attachment in the Sentry Web UI. It is
+ * recommended to use unique filenames to make attachments easier to
+ * differentiate. However, neither `filename` nor `buf` is used to reject
+ * duplicate attachments.
+ *
+ * NOTE: When using the `crashpad` backend, it writes byte attachments to disk
+ * into a flat directory structure. If multiple buffers are attached with the
+ * same `filename`, it will internally ensure unique filenames for attachments
+ * by appending a unique suffix to the filename. Therefore, attachments may show
+ * up with altered names in the Sentry Web UI.
+ *
+ * The returned `sentry_attachment_t` is owned by the SDK and will remain valid
+ * until the attachment is removed with `sentry_remove_attachment` or
+ * `sentry_close` is called.
+ *
+ * See the NOTE on attachments above for restrictions of this API.
+ */
+SENTRY_API sentry_attachment_t *sentry_attach_bytes(
+    const char *buf, size_t buf_len, const char *filename);
+SENTRY_API sentry_attachment_t *sentry_attach_bytes_n(
+    const char *buf, size_t buf_len, const char *filename, size_t filename_len);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_bytes(sentry_scope_t *scope,
+    const char *buf, size_t buf_len, const char *filename);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_bytes_n(
+    sentry_scope_t *scope, const char *buf, size_t buf_len,
+    const char *filename, size_t filename_len);
+
+/**
+ * Removes and frees all previously added attachments.
+ */
+SENTRY_API void sentry_clear_attachments(void);
+
+/**
+ * Removes and frees a previously added attachment.
+ *
+ * See the NOTE on attachments above for restrictions of this API.
+ */
+SENTRY_API void sentry_remove_attachment(sentry_attachment_t *attachment);
+
+#ifdef SENTRY_PLATFORM_WINDOWS
+/**
+ * Wide char versions of `sentry_attach_file` and `sentry_scope_attach_file`.
+ */
+SENTRY_API sentry_attachment_t *sentry_attach_filew(const wchar_t *path);
+SENTRY_API sentry_attachment_t *sentry_attach_filew_n(
+    const wchar_t *path, size_t path_len);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_filew(
+    sentry_scope_t *scope, const wchar_t *path);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_filew_n(
+    sentry_scope_t *scope, const wchar_t *path, size_t path_len);
+
+/**
+ * Wide char versions of `sentry_attach_bytes` and `sentry_scope_attach_bytes`.
+ */
+SENTRY_API sentry_attachment_t *sentry_attach_bytesw(
+    const char *buf, size_t buf_len, const wchar_t *filename);
+SENTRY_API sentry_attachment_t *sentry_attach_bytesw_n(const char *buf,
+    size_t buf_len, const wchar_t *filename, size_t filename_len);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_bytesw(
+    sentry_scope_t *scope, const char *buf, size_t buf_len,
+    const wchar_t *filename);
+SENTRY_API sentry_attachment_t *sentry_scope_attach_bytesw_n(
+    sentry_scope_t *scope, const char *buf, size_t buf_len,
+    const wchar_t *filename, size_t filename_len);
+#endif
+
+/**
+ * Sets the content type of an attachment.
+ */
+SENTRY_API void sentry_attachment_set_content_type(
+    sentry_attachment_t *attachment, const char *content_type);
+SENTRY_API void sentry_attachment_set_content_type_n(
+    sentry_attachment_t *attachment, const char *content_type,
+    size_t content_type_len);
+
+/**
+ * Sets the filename of an attachment.
+ */
+SENTRY_API void sentry_attachment_set_filename(
+    sentry_attachment_t *attachment, const char *filename);
+SENTRY_API void sentry_attachment_set_filename_n(
+    sentry_attachment_t *attachment, const char *filename, size_t filename_len);
+
+#ifdef SENTRY_PLATFORM_WINDOWS
+/**
+ * Wide char version of `sentry_attachment_set_filename`.
+ */
+SENTRY_API void sentry_attachment_set_filenamew(
+    sentry_attachment_t *attachment, const wchar_t *filename);
+SENTRY_API void sentry_attachment_set_filenamew_n(
+    sentry_attachment_t *attachment, const wchar_t *filename,
+    size_t filename_len);
+#endif
+
 /* -- Session APIs -- */
 
 typedef enum {
@@ -1670,6 +1994,23 @@ SENTRY_EXPERIMENTAL_API void sentry_end_session_with_status(
  */
 struct sentry_transaction_s;
 typedef struct sentry_transaction_s sentry_transaction_t;
+
+/**
+ * Type of the `before_transaction` callback.
+ *
+ * The callback takes ownership of the `transaction`, and should usually return
+ * that same transaction. In case the transaction should be discarded, the
+ * callback needs to call `sentry_value_decref` on the provided transaction, and
+ * return a `sentry_value_new_null()` instead.
+ */
+typedef sentry_value_t (*sentry_transaction_function_t)(
+    sentry_value_t transaction, void *user_data);
+
+/**
+ * Sets the `before_transaction` callback.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_options_set_before_transaction(
+    sentry_options_t *opts, sentry_transaction_function_t func, void *data);
 
 /**
  * A sentry Span.
@@ -2108,25 +2449,48 @@ SENTRY_EXPERIMENTAL_API void sentry_transaction_set_name_n(
     sentry_transaction_t *transaction, const char *name, size_t name_len);
 
 /**
- * Creates a new User Feedback with a specific name, email and comments.
+ * Creates a deprecated User Report with a specific name, email and comments.
  *
- * See https://develop.sentry.dev/sdk/envelopes/#user-feedback
- *
- * User Feedback has to be associated with a specific event that has been
- * sent to Sentry earlier.
+ * See
+ * https://develop.sentry.dev/sdk/data-model/envelope-items/#user-report---deprecated
  */
+SENTRY_DEPRECATED("Use `sentry_value_new_feedback` instead")
 SENTRY_API sentry_value_t sentry_value_new_user_feedback(
     const sentry_uuid_t *uuid, const char *name, const char *email,
     const char *comments);
+SENTRY_DEPRECATED("Use `sentry_value_new_feedback_n` instead")
 SENTRY_API sentry_value_t sentry_value_new_user_feedback_n(
     const sentry_uuid_t *uuid, const char *name, size_t name_len,
     const char *email, size_t email_len, const char *comments,
     size_t comments_len);
 
 /**
+ * Captures a deprecated User Report and sends it to Sentry.
+ */
+SENTRY_DEPRECATED("Use `sentry_capture_feedback` instead")
+SENTRY_API void sentry_capture_user_feedback(sentry_value_t user_report);
+
+/**
+ * Creates a new User Feedback with a specific message (required), and optional
+ * contact_email, name, message, and associated_event_id.
+ *
+ * See https://develop.sentry.dev/sdk/data-model/envelope-items/#user-feedback
+ *
+ * User Feedback can be associated with a specific event that has been
+ * sent to Sentry earlier.
+ */
+SENTRY_API sentry_value_t sentry_value_new_feedback(const char *message,
+    const char *contact_email, const char *name,
+    const sentry_uuid_t *associated_event_id);
+SENTRY_API sentry_value_t sentry_value_new_feedback_n(const char *message,
+    size_t message_len, const char *contact_email, size_t contact_email_len,
+    const char *name, size_t name_len,
+    const sentry_uuid_t *associated_event_id);
+
+/**
  * Captures a manually created User Feedback and sends it to Sentry.
  */
-SENTRY_API void sentry_capture_user_feedback(sentry_value_t user_feedback);
+SENTRY_API void sentry_capture_feedback(sentry_value_t user_feedback);
 
 /**
  * The status of a Span or Transaction.
@@ -2262,14 +2626,14 @@ SENTRY_EXPERIMENTAL_API const char *sentry_sdk_version(void);
 
 /**
  * Sentry SDK name set during build time.
- * Deprecated: Please use sentry_options_get_sdk_name instead.
  */
+SENTRY_DEPRECATED("Use `sentry_options_get_sdk_name` instead")
 SENTRY_EXPERIMENTAL_API const char *sentry_sdk_name(void);
 
 /**
  * Sentry SDK User-Agent set during build time.
- * Deprecated: Please use sentry_options_get_user_agent instead.
  */
+SENTRY_DEPRECATED("Use `sentry_options_get_user_agent` instead")
 SENTRY_EXPERIMENTAL_API const char *sentry_sdk_user_agent(void);
 
 #ifdef __cplusplus

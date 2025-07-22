@@ -1,3 +1,4 @@
+#include "sentry_attachment.h"
 #include "sentry_boot.h"
 
 #include "sentry_alloc.h"
@@ -30,7 +31,7 @@ struct signal_slot {
 
 // we need quite a bit of space for backtrace generation
 #    define SIGNAL_COUNT 6
-#    define SIGNAL_STACK_SIZE 65536
+#    define SIGNAL_STACK_SIZE (1024 * SENTRY_HANDLER_STACK_SIZE)
 static struct sigaction g_sigaction;
 static struct sigaction g_previous_handlers[SIGNAL_COUNT];
 static stack_t g_signal_stack = { 0 };
@@ -168,7 +169,10 @@ static int
 startup_inproc_backend(
     sentry_backend_t *UNUSED(backend), const sentry_options_t *UNUSED(options))
 {
-    sentry__reserve_thread_stack();
+#    if !defined(SENTRY_BUILD_SHARED)                                          \
+        && defined(SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT)
+    sentry__set_default_thread_stack_guarantee();
+#    endif
     g_previous_handler = SetUnhandledExceptionFilter(&handle_exception);
     SetErrorMode(SEM_FAILCRITICALERRORS);
     return 0;
@@ -586,7 +590,7 @@ handle_ucontext(const sentry_ucontext_t *uctx)
 
         if (should_handle) {
             sentry_envelope_t *envelope = sentry__prepare_event(
-                options, event, NULL, !options->on_crash_func);
+                options, event, NULL, !options->on_crash_func, NULL);
             // TODO(tracing): Revisit when investigating transaction flushing
             //                during hard crashes.
 
@@ -595,13 +599,13 @@ handle_ucontext(const sentry_ucontext_t *uctx)
             sentry__envelope_add_session(envelope, session);
 
             if (options->attach_screenshot) {
-                sentry_path_t *screenshot_path
-                    = sentry__screenshot_get_path(options);
-                if (sentry__screenshot_capture(screenshot_path)) {
-                    sentry__envelope_add_attachment(
-                        envelope, screenshot_path, NULL);
+                sentry_attachment_t *screenshot = sentry__attachment_from_path(
+                    sentry__screenshot_get_path(options));
+                if (screenshot
+                    && sentry__screenshot_capture(screenshot->path)) {
+                    sentry__envelope_add_attachment(envelope, screenshot);
                 }
-                sentry__path_free(screenshot_path);
+                sentry__attachment_free(screenshot);
             }
 
             // capture the envelope with the disk transport

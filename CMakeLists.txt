@@ -1,16 +1,21 @@
 if(WIN32)
-	cmake_minimum_required (VERSION 3.18)
+	cmake_minimum_required(VERSION 3.18)
 
 	# enables support for CMAKE_MSVC_RUNTIME_LIBRARY
 	cmake_policy(SET CMP0091 NEW)
 else()
 	# The Android tools ship with this ancient version, which we need to support.
-	cmake_minimum_required (VERSION 3.10)
+	cmake_minimum_required(VERSION 3.10)
 	cmake_policy(SET CMP0077 NEW)
 endif()
 set(SENTRY_TOOLCHAINS_DIR "${CMAKE_CURRENT_LIST_DIR}/toolchains")
 if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
 	include("${SENTRY_TOOLCHAINS_DIR}/xbox/CMakeGDKScarlett.cmake")
+	set(XBOX TRUE)
+endif()
+if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.XboxOne.x64")
+	include("${SENTRY_TOOLCHAINS_DIR}/xbox/CMakeGDKXboxOne.cmake")
+	set(XBOX TRUE)
 endif()
 
 add_definitions(-w)
@@ -67,6 +72,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	set(LINUX TRUE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "AIX" OR CMAKE_SYSTEM_NAME STREQUAL "OS400")
 	set(AIX TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Prospero")
+	set(PROSPERO TRUE)
 endif()
 
 #setup sentry library type
@@ -86,8 +93,9 @@ option(SENTRY_TRANSPORT_COMPRESSION "Enable transport gzip compression" OFF)
 
 option(SENTRY_BUILD_TESTS "Build sentry-native tests" "${SENTRY_MAIN_PROJECT}")
 option(SENTRY_BUILD_EXAMPLES "Build sentry-native example(s)" "${SENTRY_MAIN_PROJECT}")
+option(SENTRY_BUILD_BENCHMARKS "Build sentry-native benchmarks" OFF)
 
-if (NOT ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64"))
+if(NOT XBOX)
 	option(SENTRY_LINK_PTHREAD "Link platform threads library" ON)
 	if(SENTRY_LINK_PTHREAD)
 		set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -110,6 +118,15 @@ if(LINUX)
 		set(CMAKE_ASM_FLAGS  "${CMAKE_ASM_FLAGS} -m32 -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE")
 		set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS OFF)
 	endif()
+
+        execute_process(
+                COMMAND ${CMAKE_C_COMPILER} -dumpmachine
+                OUTPUT_VARIABLE TARGET_TRIPLET
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(TARGET_TRIPLET MATCHES "musl")
+                set(MUSL TRUE)
+        endif()
 endif()
 
 # CMAKE_POSITION_INDEPENDENT_CODE must be set BEFORE adding any libraries (including subprojects)
@@ -121,28 +138,39 @@ endif()
 
 if(WIN32)
 	set(SENTRY_DEFAULT_TRANSPORT "winhttp")
-elseif((APPLE AND NOT IOS) OR LINUX OR AIX)
+	set(_SUPPORTED_TRANSPORTS "none, winhttp")
+elseif(PROSPERO)
+	set(SENTRY_DEFAULT_TRANSPORT "pshttp")
+	set(_SUPPORTED_TRANSPORTS "none, pshttp")
+elseif((APPLE AND NOT IOS) OR LINUX OR AIX OR NX)
 	set(SENTRY_DEFAULT_TRANSPORT "curl")
+	set(_SUPPORTED_TRANSPORTS "none, curl")
 else()
 	set(SENTRY_DEFAULT_TRANSPORT "none")
+	set(_SUPPORTED_TRANSPORTS "none, curl, or winhttp on Windows")
 endif()
 
 set(SENTRY_TRANSPORT ${SENTRY_DEFAULT_TRANSPORT} CACHE STRING
-	"The HTTP transport that sentry uses to submit events to the sentry server, can be either 'none', 'curl' or 'winhttp' on windows.")
+	"The HTTP transport that sentry uses to submit events to the sentry server, can be one of: ${_SUPPORTED_TRANSPORTS}.")
 
 if(SENTRY_TRANSPORT STREQUAL "winhttp")
 	set(SENTRY_TRANSPORT_WINHTTP TRUE)
+	if(NOT WIN32)
+		message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
+	endif()
 elseif(SENTRY_TRANSPORT STREQUAL "curl")
 	set(SENTRY_TRANSPORT_CURL TRUE)
 elseif(SENTRY_TRANSPORT STREQUAL "none")
 	set(SENTRY_TRANSPORT_NONE TRUE)
+elseif(SENTRY_TRANSPORT STREQUAL "pshttp")
+	# Not implemented here, but in the downstream SDK
+	if(NOT PROSPERO)
+		message(FATAL_ERROR "The pshttp transport is only supported on PlayStation.")
+	endif()
 else()
-	message(FATAL_ERROR "SENTRY_TRANSPORT must be one of 'none', 'curl' or 'winhttp'")
+	message(FATAL_ERROR "SENTRY_TRANSPORT must be one of: ${_SUPPORTED_TRANSPORTS}")
 endif()
 
-if(SENTRY_TRANSPORT_WINHTTP AND NOT WIN32)
-	message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
-endif()
 
 if(SENTRY_BUILD_TESTS OR SENTRY_BUILD_EXAMPLES)
 	enable_testing()
@@ -157,7 +185,7 @@ option(SENTRY_ENABLE_INSTALL "Enable sentry installation" "${SENTRY_MAIN_PROJECT
 if(MSVC AND CMAKE_GENERATOR_TOOLSET MATCHES "_xp$")
 	message(WARNING "Crashpad is not supported for MSVC with XP toolset. Default backend was switched to 'breakpad'")
 	set(SENTRY_DEFAULT_BACKEND "breakpad")
-elseif(MSVC AND "${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
+elseif(MSVC AND XBOX)
 	set(SENTRY_DEFAULT_BACKEND "breakpad")
 elseif((APPLE AND NOT IOS) OR WIN32 OR LINUX)
 	set(SENTRY_DEFAULT_BACKEND "crashpad")
@@ -192,15 +220,29 @@ if(SENTRY_BACKEND_CRASHPAD AND ANDROID)
 endif()
 
 set(SENTRY_SDK_NAME "" CACHE STRING "The SDK name to report when sending events.")
+set(SENTRY_HANDLER_STACK_SIZE 64 CACHE STRING "The stack size (in KiB) that should be reserved for the crash handler.")
+if (WIN32)
+	set(SENTRY_THREAD_STACK_GUARANTEE_FACTOR 10 CACHE STRING "The factor by which a threads stack should be larger than the stack guarantee for its handler.")
+	option(SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT "Automatically sets the thread stack guarantee for each thread via `DllMain` or for the `sentry_init()` when building statically" ON)
+	option(SENTRY_THREAD_STACK_GUARANTEE_VERBOSE_LOG "Enables logging of successfully set thread stack guarantees" OFF)
+endif()
 
 message(STATUS "SENTRY_TRANSPORT=${SENTRY_TRANSPORT}")
 message(STATUS "SENTRY_BACKEND=${SENTRY_BACKEND}")
 message(STATUS "SENTRY_LIBRARY_TYPE=${SENTRY_LIBRARY_TYPE}")
 message(STATUS "SENTRY_SDK_NAME=${SENTRY_SDK_NAME}")
+message(STATUS "SENTRY_HANDLER_STACK_SIZE=${SENTRY_HANDLER_STACK_SIZE}")
+if (WIN32)
+	message(STATUS "SENTRY_THREAD_STACK_GUARANTEE_FACTOR=${SENTRY_THREAD_STACK_GUARANTEE_FACTOR}")
+	message(STATUS "SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT=${SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT}")
+	message(STATUS "SENTRY_THREAD_STACK_GUARANTEE_VERBOSE_LOG=${SENTRY_THREAD_STACK_GUARANTEE_VERBOSE_LOG}")
+endif()
 
 if(ANDROID)
 	set(SENTRY_WITH_LIBUNWINDSTACK TRUE)
-elseif(NOT WIN32)
+elseif(MUSL)
+	set(SENTRY_WITH_LIBUNWIND TRUE)
+elseif(NOT WIN32 AND NOT PROSPERO)
 	set(SENTRY_WITH_LIBBACKTRACE TRUE)
 endif()
 
@@ -260,12 +302,23 @@ endfunction()
 # ===== sentry library =====
 
 add_library(sentry ${SENTRY_LIBRARY_TYPE} "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
-if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
+if (XBOX)
 	set_target_properties(sentry PROPERTIES VS_USER_PROPS gdk_build.props)
 endif()
 target_sources(sentry PRIVATE "${PROJECT_SOURCE_DIR}/include/sentry.h")
 add_library(sentry::sentry ALIAS sentry)
 add_subdirectory(src)
+
+target_compile_definitions(sentry PRIVATE SENTRY_HANDLER_STACK_SIZE=${SENTRY_HANDLER_STACK_SIZE})
+if(WIN32)
+	target_compile_definitions(sentry PRIVATE SENTRY_THREAD_STACK_GUARANTEE_FACTOR=${SENTRY_THREAD_STACK_GUARANTEE_FACTOR})
+	if (SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT)
+		target_compile_definitions(sentry PRIVATE SENTRY_THREAD_STACK_GUARANTEE_AUTO_INIT)
+	endif()
+	if (SENTRY_THREAD_STACK_GUARANTEE_VERBOSE_LOG)
+		target_compile_definitions(sentry PRIVATE SENTRY_THREAD_STACK_GUARANTEE_VERBOSE_LOG)
+	endif()
+endif()
 
 if (NOT SENTRY_SDK_NAME STREQUAL "")
 	target_compile_definitions(sentry PRIVATE SENTRY_SDK_NAME="${SENTRY_SDK_NAME}")
@@ -317,7 +370,7 @@ endif()
 
 if(SENTRY_TRANSPORT_CURL)
 	if(NOT TARGET CURL::libcurl) # Some other lib might bring libcurl already
-		find_package(CURL REQUIRED COMPONENTS AsynchDNS)
+		find_package(CURL REQUIRED)
 	endif()
 
 	target_link_libraries(sentry PRIVATE CURL::libcurl)
@@ -344,7 +397,7 @@ if(MSVC)
 
 	# using `/Wall` is not feasible, as it spews tons of warnings from windows headers
 	# supress C5105, introduced in VS 16.8, which breaks on the Windows SDKs own `winbase.h` header
-	if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
+	if (XBOX)
 		target_compile_options(sentry PRIVATE $<BUILD_INTERFACE:/W4 /wd5105 /wd4115>)
 	else()
 		target_compile_options(sentry PRIVATE $<BUILD_INTERFACE:/W4 /wd5105>)
@@ -451,7 +504,7 @@ elseif(LINUX)
 elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "Gaming.Xbox.XboxOne.x64" OR CMAKE_GENERATOR_PLATFORM STREQUAL "Gaming.Xbox.Scarlett.x64")
 	set(_SENTRY_PLATFORM_LIBS "dbghelp" "xgameplatform" "xmem")
 elseif(WIN32)
-	if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
+	if (XBOX)
 		set(_SENTRY_PLATFORM_LIBS "version")
 	else()
 		set(_SENTRY_PLATFORM_LIBS "dbghelp" "shlwapi" "version")
@@ -463,7 +516,7 @@ if(SENTRY_TRANSPORT_WINHTTP)
 endif()
 
 # handle platform threads library
-if (NOT ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64"))
+if(NOT XBOX)
 	if(SENTRY_LINK_PTHREAD)
 		list(APPEND _SENTRY_PLATFORM_LIBS "Threads::Threads")
 	endif()
@@ -493,6 +546,24 @@ if(SENTRY_WITH_LIBUNWINDSTACK)
 			LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 			ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 		)
+	endif()
+endif()
+
+if(SENTRY_WITH_LIBUNWIND)
+	if(LINUX)
+		option(SENTRY_LIBUNWIND_SHARED "Link to shared libunwind" ${SENTRY_BUILD_SHARED_LIBS})
+		find_path(LIBUNWIND_INCLUDE_DIR libunwind.h PATH_SUFFIXES libunwind REQUIRED)
+		if(SENTRY_LIBUNWIND_SHARED)
+			find_library(LIBUNWIND_LIBRARIES unwind REQUIRED)
+		else()
+			find_library(LIBUNWIND_LIBRARIES libunwind.a REQUIRED)
+			find_library(LZMA_LIBRARY lzma)
+			if(LZMA_LIBRARY)
+				list(APPEND LIBUNWIND_LIBRARIES ${LZMA_LIBRARY})
+			endif()
+		endif()
+		target_include_directories(sentry PRIVATE ${LIBUNWIND_INCLUDE_DIR})
+		target_link_libraries(sentry PRIVATE ${LIBUNWIND_LIBRARIES})
 	endif()
 endif()
 
@@ -639,13 +710,19 @@ endif()
 if(SENTRY_BUILD_TESTS)
 	add_subdirectory(tests/unit)
 	add_subdirectory(tests/fixtures/screenshot)
+	if(SENTRY_BUILD_BENCHMARKS)
+		set(BENCHMARK_ENABLE_TESTING OFF)
+		set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
+		add_subdirectory(external/benchmark)
+		add_subdirectory(tests/benchmark)
+	endif()
 endif()
 
 # ===== example, also used as integration test =====
 
 if(SENTRY_BUILD_EXAMPLES)
 	add_executable(sentry_example examples/example.c)
-	if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Gaming.Xbox.Scarlett.x64")
+	if(XBOX)
 		set_target_properties(sentry_example PROPERTIES VS_USER_PROPS gdk_build.props)
 	endif()
 	target_link_libraries(sentry_example PRIVATE sentry)
@@ -653,7 +730,10 @@ if(SENTRY_BUILD_EXAMPLES)
 	if(MSVC)
 		target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:/wd5105 /wd4717>)
 		if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang") # clang-cl
+			# ignore the warning for the intentionally infinite recursion
 			target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:-Wno-infinite-recursion>)
+			# ensure that clang-cl builds an unoptimized `sentry_example` in all build types
+			target_compile_options(sentry_example PRIVATE $<BUILD_INTERFACE:/Od>)
 		endif()
 
 		# to test handling SEH by-passing exceptions we need to enable the control flow guard
@@ -676,7 +756,8 @@ if(SENTRY_BUILD_EXAMPLES)
 	add_custom_command(TARGET sentry_example POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/minidump.dmp" "$<TARGET_FILE_DIR:sentry_example>/minidump.dmp")
 
-	add_test(NAME sentry_example COMMAND sentry_example)
+	add_custom_command(TARGET sentry_example POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/view-hierarchy.json" "$<TARGET_FILE_DIR:sentry_example>/view-hierarchy.json")
 endif()
 
 # Limit the exported symbols when sentry is built as a shared library to those with a "sentry_" prefix:

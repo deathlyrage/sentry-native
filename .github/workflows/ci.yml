@@ -61,10 +61,16 @@ jobs:
             os: ubuntu-24.04
             CC: gcc-14
             CXX: g++-14
-            # ERROR_ON_WARNINGS: 1
-            # The GCC analyzer 10.0.1 (as on CI) has an internal compiler error
-            # currently, and is not stable enough to activate.
-            # RUN_ANALYZER: gcc
+          - name: Linux Arm64 (GCC 14.2.0 + tsan)
+            os: ubuntu-24.04-arm
+            CC: gcc-14
+            CXX: g++-14
+            RUN_ANALYZER: tsan
+          - name: Linux (GCC 14.2.0 + tsan)
+            os: ubuntu-24.04
+            CC: gcc-14
+            CXX: g++-14
+            RUN_ANALYZER: tsan
           - name: Linux (clang 19 + asan + llvm-cov)
             os: ubuntu-24.04
             CC: clang-19
@@ -77,6 +83,18 @@ jobs:
             CXX: clang++-19
             ERROR_ON_WARNINGS: 1
             RUN_ANALYZER: asan,llvm-cov
+          - name: Linux (clang 19 + tsan)
+            os: ubuntu-24.04
+            CC: clang-19
+            CXX: clang++-19
+            ERROR_ON_WARNINGS: 1
+            RUN_ANALYZER: tsan
+          - name: Linux Arm64 (clang 19 + tsan)
+            os: ubuntu-24.04-arm
+            CC: clang-19
+            CXX: clang++-19
+            ERROR_ON_WARNINGS: 1
+            RUN_ANALYZER: tsan
           - name: Linux (clang 19 + kcov)
             os: ubuntu-24.04
             CC: clang-19
@@ -86,6 +104,20 @@ jobs:
           - name: Linux (GCC 13.3.0 + code-checker + valgrind)
             os: ubuntu-24.04
             RUN_ANALYZER: code-checker,valgrind
+          - name: Linux (GCC + musl + libunwind)
+            os: ubuntu-latest
+            container: ghcr.io/getsentry/sentry-native-alpine:3.21
+            CMAKE_DEFINES: -DSENTRY_LIBUNWIND_SHARED=OFF
+            CC: gcc
+            CXX: g++
+            SYSTEM_PYTHON: 1
+          - name: Linux (clang + musl + libunwind)
+            os: ubuntu-latest
+            container: ghcr.io/getsentry/sentry-native-alpine:3.21
+            CMAKE_DEFINES: -DSENTRY_LIBUNWIND_SHARED=OFF
+            CC: clang
+            CXX: clang++
+            SYSTEM_PYTHON: 1
           - name: macOS 14 (xcode llvm)
             os: macos-14
             ERROR_ON_WARNINGS: 1
@@ -107,7 +139,7 @@ jobs:
             SYSTEM_VERSION_COMPAT: 0
             RUN_ANALYZER: asan,llvm-cov
           - name: Windows (old VS, 32-bit)
-            os: windows-2019
+            os: windows-2022
             TEST_X86: 1
           - name: Windows (latest)
             os: windows-latest
@@ -135,6 +167,7 @@ jobs:
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
 
     env:
       TEST_X86: ${{ matrix.TEST_X86 }}
@@ -147,6 +180,7 @@ jobs:
       CMAKE_DEFINES: ${{ matrix.CMAKE_DEFINES }}
       SYSTEM_VERSION_COMPAT: ${{ matrix.SYSTEM_VERSION_COMPAT }}
       VS_GENERATOR_TOOLSET: ${{ matrix.VS_GENERATOR_TOOLSET }}
+      SYSTEM_PYTHON: ${{ matrix.SYSTEM_PYTHON }}
 
     steps:
       - uses: actions/checkout@v4
@@ -154,11 +188,11 @@ jobs:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ !env['SYSTEM_PYTHON'] && '3.11' || '' }}
           cache: "pip"
 
       - name: Installing Linux Dependencies
-        if: ${{ runner.os == 'Linux' && matrix.os != 'ubuntu-22.04' && !env['TEST_X86'] }}
+        if: ${{ runner.os == 'Linux' && matrix.os != 'ubuntu-22.04' && !env['TEST_X86'] && !matrix.container }}
         run: |
           sudo apt update
           sudo apt install cmake clang-19 llvm g++-12 valgrind zlib1g-dev libcurl4-openssl-dev
@@ -166,6 +200,8 @@ jobs:
           sudo apt-get install binutils-dev libssl-dev libelf-dev libstdc++-12-dev libdw-dev libiberty-dev
           git clone https://github.com/SimonKagstrom/kcov.git
           cd kcov
+          # pin to a known good version with the coveralls git integration and performance bottlenecks fixed
+          git checkout 8afe9f29c58ef575877664c7ba209328233b70cc
           mkdir build
           cd build
           cmake ..
@@ -173,17 +209,23 @@ jobs:
           sudo make install
 
       - name: Installing Linux GCC 9.4.0 Dependencies
-        if: ${{ runner.os == 'Linux' && matrix.os == 'ubuntu-22.04' && !env['TEST_X86'] }}
+        if: ${{ runner.os == 'Linux' && matrix.os == 'ubuntu-22.04' && !env['TEST_X86'] && !matrix.container }}
         run: |
           sudo apt update
           sudo apt install cmake llvm kcov g++ valgrind zlib1g-dev libcurl4-openssl-dev
 
       - name: Installing Linux 32-bit Dependencies
-        if: ${{ runner.os == 'Linux' && env['TEST_X86'] }}
+        if: ${{ runner.os == 'Linux' && env['TEST_X86'] && !matrix.container }}
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update
           sudo apt install cmake gcc-9-multilib g++-9-multilib zlib1g-dev:i386 libssl-dev:i386 libcurl4-openssl-dev:i386
+
+      - name: Installing Alpine Linux Dependencies
+        if: ${{ contains(matrix.container, 'alpine') }}
+        run: |
+          apk update
+          apk add curl-dev libunwind-dev libunwind-static xz-dev
 
         # https://github.com/actions/runner-images/issues/9491
       - name: Decrease vm.mmap_rnd_bit to prevent ASLR ASAN issues
@@ -249,6 +291,8 @@ jobs:
         if: ${{ runner.os == 'macOS' || runner.os == 'Linux' }}
         run: |
           echo "127.0.0.1   sentry.native.test" | sudo tee -a /etc/hosts
+          # remove "::1 localhost ..." to avoid conflicts with proxy tests (musl)
+          sed '/^::1/d' /etc/hosts | sudo tee /etc/hosts
           cat /etc/hosts
         shell: bash
 
@@ -267,7 +311,7 @@ jobs:
 
       - name: "Upload to codecov.io"
         if: ${{ contains(env['RUN_ANALYZER'], 'cov') }}
-        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673 # pin@v4.5.0
+        uses: codecov/codecov-action@ad3126e916f78f00edff4ed0317cf185271ccc2d # pin@v5.4.2
         with:
           directory: coverage
           token: ${{ secrets.CODECOV_TOKEN }}

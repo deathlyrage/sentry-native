@@ -1,5 +1,6 @@
 import email
 import gzip
+import json
 import platform
 import re
 import sys
@@ -41,13 +42,25 @@ def assert_session(envelope, extra_assertion=None):
 def assert_user_feedback(envelope):
     user_feedback = None
     for item in envelope:
-        if item.headers.get("type") == "user_report" and item.payload.json is not None:
-            user_feedback = item.payload.json
+        if item.headers.get("type") == "feedback" and item.payload.json is not None:
+            user_feedback = item.payload.json["contexts"]["feedback"]
 
     assert user_feedback is not None
     assert user_feedback["name"] == "some-name"
-    assert user_feedback["email"] == "some-email"
-    assert user_feedback["comments"] == "some-comment"
+    assert user_feedback["contact_email"] == "some-email"
+    assert user_feedback["message"] == "some-message"
+
+
+def assert_user_report(envelope):
+    user_report = None
+    for item in envelope:
+        if item.headers.get("type") == "user_report" and item.payload.json is not None:
+            user_report = item.payload.json
+
+    assert user_report is not None
+    assert user_report["name"] == "some-name"
+    assert user_report["email"] == "some-email"
+    assert user_report["comments"] == "some-comment"
 
 
 def assert_meta(
@@ -83,16 +96,16 @@ def assert_event_meta(
         "platform": "native",
         "environment": "development",
         "release": release,
-        "user": {"id": 42, "username": "some_name"},
+        "user": {"id": "42", "username": "some_name"},
         "transaction": transaction,
         "tags": {"expected-tag": "some value"},
         "extra": extra,
     }
     expected_sdk = {
         "name": "sentry.native",
-        "version": "0.8.3",
+        "version": "0.9.1",
         "packages": [
-            {"name": "github:getsentry/sentry-native", "version": "0.8.3"},
+            {"name": "github:getsentry/sentry-native", "version": "0.9.1"},
         ],
     }
     if is_android:
@@ -168,10 +181,10 @@ def assert_stacktrace(envelope, inside_exception=False, check_size=True):
         )
 
 
-def assert_breadcrumb_inner(breadcrumbs):
+def assert_breadcrumb_inner(breadcrumbs, message="debug crumb"):
     expected = {
         "type": "http",
-        "message": "debug crumb",
+        "message": message,
         "category": "example!",
         "level": "debug",
         "data": {
@@ -184,9 +197,9 @@ def assert_breadcrumb_inner(breadcrumbs):
     assert any(matches(b, expected) for b in breadcrumbs)
 
 
-def assert_breadcrumb(envelope):
+def assert_breadcrumb(envelope, message="debug crumb"):
     event = envelope.get_event()
-    assert_breadcrumb_inner(event["breadcrumbs"])
+    assert_breadcrumb_inner(event["breadcrumbs"], message)
 
 
 def assert_attachment(envelope):
@@ -194,7 +207,49 @@ def assert_attachment(envelope):
         "type": "attachment",
         "filename": "CMakeCache.txt",
     }
+    assert any(
+        matches(item.headers, expected)
+        and b"This is the CMakeCache file." in item.payload.bytes
+        for item in envelope
+    )
+
+    expected = {
+        "type": "attachment",
+        "filename": "bytes.bin",
+        "content_type": "application/octet-stream",
+    }
+    assert any(
+        matches(item.headers, expected) and item.payload.bytes == b"\xc0\xff\xee"
+        for item in envelope
+    )
+
+
+def assert_attachment_view_hierarchy(envelope):
+    expected = {
+        "type": "attachment",
+        "filename": "view-hierarchy.json",
+        "attachment_type": "event.view_hierarchy",
+        "content_type": "application/json",
+    }
     assert any(matches(item.headers, expected) for item in envelope)
+
+
+def assert_attachment_content_view_hierarchy(attachment):
+    expected = {
+        "rendering_system": "android_view_system",
+        "windows": [
+            {
+                "alpha": 1.0,
+                "height": 1280.0,
+                "type": "com.android.internal.policy.DecorView",
+                "visibility": "visible",
+                "width": 768.0,
+                "x": 0.0,
+                "y": 0.0,
+            }
+        ],
+    }
+    assert matches(attachment, expected)
 
 
 def assert_minidump(envelope):
@@ -212,7 +267,7 @@ def assert_timestamp(ts):
     assert elapsed_time.total_seconds() < 10
 
 
-def assert_event(envelope, message="Hello World!"):
+def assert_event(envelope, message="Hello World!", expected_trace_id=""):
     event = envelope.get_event()
     expected = {
         "level": "info",
@@ -221,6 +276,15 @@ def assert_event(envelope, message="Hello World!"):
     }
     assert_matches(event, expected)
     assert_timestamp(event["timestamp"])
+    assert_trace_id(event, expected_trace_id)
+
+
+# if expected_trace is "" we just expect any value to exist
+def assert_trace_id(event, expected_trace_id):
+    if expected_trace_id == "":
+        assert len(event["contexts"]["trace"]["trace_id"]) == 32
+    else:
+        assert event["contexts"]["trace"]["trace_id"] == expected_trace_id
 
 
 def assert_breakpad_crash(envelope):
@@ -273,6 +337,9 @@ class CrashpadAttachments:
     event: dict
     breadcrumb1: list
     breadcrumb2: list
+    view_hierarchy: dict
+    cmake_cache: int
+    bytes_bin: bytes = None
 
 
 def _unpack_breadcrumbs(payload):
@@ -285,6 +352,9 @@ def _load_crashpad_attachments(msg):
     event = {}
     breadcrumb1 = []
     breadcrumb2 = []
+    view_hierarchy = {}
+    cmake_cache = -1
+    bytes_bin = None
     for part in msg.walk():
         if part.get_filename() is not None:
             assert part.get("Content-Type") is None
@@ -296,8 +366,16 @@ def _load_crashpad_attachments(msg):
                 breadcrumb1 = _unpack_breadcrumbs(part.get_payload(decode=True))
             case "__sentry-breadcrumb2":
                 breadcrumb2 = _unpack_breadcrumbs(part.get_payload(decode=True))
+            case "view-hierarchy.json":
+                view_hierarchy = json.loads(part.get_payload(decode=True))
+            case "CMakeCache.txt":
+                cmake_cache = len(part.get_payload(decode=True))
+            case "bytes.bin":
+                bytes_bin = part.get_payload(decode=True)
 
-    return CrashpadAttachments(event, breadcrumb1, breadcrumb2)
+    return CrashpadAttachments(
+        event, breadcrumb1, breadcrumb2, view_hierarchy, cmake_cache, bytes_bin
+    )
 
 
 def is_valid_timestamp(timestamp):
@@ -325,13 +403,23 @@ def assert_overflowing_breadcrumb(attachments):
         assert_breadcrumb_inner(attachments.breadcrumb1)
 
 
-def assert_crashpad_upload(req):
+def assert_crashpad_upload(req, expect_attachment=False, expect_view_hierarchy=False):
     multipart = gzip.decompress(req.get_data())
     msg = email.message_from_bytes(bytes(str(req.headers), encoding="utf8") + multipart)
     attachments = _load_crashpad_attachments(msg)
 
     assert_overflowing_breadcrumb(attachments)
     assert_event_meta(attachments.event, integration="crashpad")
+    if expect_attachment:
+        assert attachments.cmake_cache > 0
+    else:
+        assert attachments.cmake_cache == -1
+    if expect_attachment and (sys.platform == "win32" or sys.platform == "linux"):
+        assert attachments.bytes_bin == b"\xc0\xff\xee"
+    else:
+        assert attachments.bytes_bin == None
+    if expect_view_hierarchy:
+        assert_attachment_content_view_hierarchy(attachments.view_hierarchy)
     assert any(
         b'name="upload_file_minidump"' in part.as_bytes()
         and b"\n\nMDMP" in part.as_bytes()

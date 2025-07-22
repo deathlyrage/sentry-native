@@ -1,6 +1,5 @@
 #include "sentry_logger.h"
 #include "sentry_core.h"
-#include "sentry_options.h"
 #include "sentry_string.h"
 
 #include <stdio.h>
@@ -56,6 +55,9 @@ sentry__logger_defaultlogger(
     size_t len = strlen(prefix) + strlen(priority)
         + sentry__guarded_strlen(message) + 2;
     char *format = sentry_malloc(len);
+    if (!format) {
+        return;
+    }
     snprintf(format, len, "%s%s%s\n", prefix, priority, message);
 
     vfprintf(stderr, format, args);

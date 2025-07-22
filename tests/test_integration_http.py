@@ -30,19 +30,21 @@ from .assertions import (
     assert_inproc_crash,
     assert_session,
     assert_user_feedback,
+    assert_user_report,
     assert_minidump,
     assert_breakpad_crash,
     assert_gzip_content_encoding,
     assert_gzip_file_header,
     assert_failed_proxy_auth_request,
+    assert_attachment_view_hierarchy,
 )
-from .conditions import has_http, has_breakpad, has_files, has_crashpad
+from .conditions import has_http, has_breakpad, has_files
 
 pytestmark = pytest.mark.skipif(not has_http, reason="tests need http")
 
 # fmt: off
 auth_header = (
-    "Sentry sentry_key=uiaeosnrtdy, sentry_version=7, sentry_client=sentry.native/0.8.3"
+    "Sentry sentry_key=uiaeosnrtdy, sentry_version=7, sentry_client=sentry.native/0.9.1"
 )
 # fmt: on
 
@@ -167,6 +169,30 @@ def test_user_feedback_http(cmake, httpserver):
         env=env,
     )
 
+    assert len(httpserver.log) == 1
+    output = httpserver.log[0][0].get_data()
+    envelope = Envelope.deserialize(output)
+
+    assert_user_feedback(envelope)
+
+
+def test_user_report_http(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "capture-user-report"],
+        check=True,
+        env=env,
+    )
+
     assert len(httpserver.log) == 2
     output = httpserver.log[0][0].get_data()
     envelope = Envelope.deserialize(output)
@@ -176,7 +202,7 @@ def test_user_feedback_http(cmake, httpserver):
     output = httpserver.log[1][0].get_data()
     envelope = Envelope.deserialize(output)
 
-    assert_user_feedback(envelope)
+    assert_user_report(envelope)
 
 
 def test_exception_and_session_http(cmake, httpserver):
@@ -284,7 +310,7 @@ def test_inproc_crash_http(cmake, httpserver, build_args):
     child = run(
         tmp_path,
         "sentry_example",
-        ["log", "start-session", "attachment", "crash"],
+        ["log", "start-session", "attachment", "attach-view-hierarchy", "crash"],
         env=env,
     )
     assert child.returncode  # well, it's a crash after all
@@ -312,6 +338,7 @@ def test_inproc_crash_http(cmake, httpserver, build_args):
     assert_meta(envelope, integration="inproc")
     assert_breadcrumb(envelope)
     assert_attachment(envelope)
+    assert_attachment_view_hierarchy(envelope)
 
     assert_inproc_crash(envelope)
 
@@ -384,7 +411,7 @@ def test_breakpad_crash_http(cmake, httpserver, build_args):
     child = run(
         tmp_path,
         "sentry_example",
-        ["log", "start-session", "attachment", "crash"],
+        ["log", "start-session", "attachment", "attach-view-hierarchy", "crash"],
         env=env,
     )
     assert child.returncode  # well, it's a crash after all
@@ -412,6 +439,7 @@ def test_breakpad_crash_http(cmake, httpserver, build_args):
     assert_meta(envelope, integration="breakpad")
     assert_breadcrumb(envelope)
     assert_attachment(envelope)
+    assert_attachment_view_hierarchy(envelope)
 
     assert_breakpad_crash(envelope)
     assert_minidump(envelope)
@@ -565,7 +593,7 @@ def test_transaction_only(cmake, httpserver, build_args):
     assert event.headers["type"] == "transaction"
     payload = event.payload.json
 
-    # See https://develop.sentry.dev/sdk/performance/trace-context/#trace-context
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
     trace_context = payload["contexts"]["trace"]
 
     assert (
@@ -576,8 +604,65 @@ def test_transaction_only(cmake, httpserver, build_args):
     trace_id = uuid.UUID(hex=trace_context["trace_id"])
     assert trace_id
 
-    # TODO: currently missing
-    # assert trace_context['public_key']
+    assert trace_context["span_id"]
+    assert trace_context["status"] == "ok"
+
+    start_timestamp = time.strptime(payload["start_timestamp"], RFC3339_FORMAT)
+    assert start_timestamp
+    timestamp = time.strptime(payload["timestamp"], RFC3339_FORMAT)
+    assert timestamp >= start_timestamp
+
+    assert trace_context["data"] == {"url": "https://example.com"}
+
+
+def test_before_transaction_callback(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "capture-transaction", "before-transaction"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 1
+    req = httpserver.log[0][0]
+    body = req.get_data()
+
+    envelope = Envelope.deserialize(body)
+
+    # Show what the envelope looks like if the test fails.
+    envelope.print_verbose()
+
+    # callback has changed from default teapot to coffeepot
+    assert_meta(
+        envelope,
+        transaction="little.coffeepot",
+    )
+
+    # Extract the one-and-only-item
+    (event,) = envelope.items
+
+    assert event.headers["type"] == "transaction"
+    payload = event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    assert (
+        trace_context["op"] == "Short and stout here is my handle and here is my spout"
+    )
+
+    assert trace_context["trace_id"]
+    trace_id = uuid.UUID(hex=trace_context["trace_id"])
+    assert trace_id
 
     assert trace_context["span_id"]
     assert trace_context["status"] == "ok"
@@ -588,6 +673,354 @@ def test_transaction_only(cmake, httpserver, build_args):
     assert timestamp >= start_timestamp
 
     assert trace_context["data"] == {"url": "https://example.com"}
+
+
+def test_before_transaction_discard(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "capture-transaction", "discarding-before-transaction"],
+        check=True,
+        env=env,
+    )
+
+    # transaction should have been discarded
+    assert len(httpserver.log) == 0
+
+
+def test_transaction_event(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "capture-transaction", "capture-event"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 2
+    tx_req = httpserver.log[1][0]
+    tx_body = tx_req.get_data()
+
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    tx_envelope = Envelope.deserialize(tx_body)
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Show what the envelope looks like if the test fails.
+    tx_envelope.print_verbose()
+
+    # The transaction is overwritten.
+    assert_meta(
+        tx_envelope,
+        transaction="little.teapot",
+    )
+
+    # Extract the transaction and event items
+    (tx_event,) = tx_envelope.items
+    (event,) = event_envelope.items
+
+    assert tx_event.headers["type"] == "transaction"
+    payload = tx_event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    assert trace_context["trace_id"]
+    tx_trace_id = uuid.UUID(hex=trace_context["trace_id"])
+    assert tx_trace_id
+    event_trace_id = uuid.UUID(hex=event.payload.json["contexts"]["trace"]["trace_id"])
+    # by default, transactions and events should have the same trace id (picked up from the propagation context)
+    assert tx_trace_id == event_trace_id
+    assert_event(event_envelope, "Hello World!", trace_context["trace_id"])
+    # non-scoped tx should differ in span_id from the event span_id
+    assert trace_context["span_id"]
+    assert (
+        trace_context["span_id"] != event.payload.json["contexts"]["trace"]["span_id"]
+    )
+
+
+def test_transaction_trace_header(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "set-trace", "capture-transaction"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 1
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Extract the one-and-only-item
+    (event,) = event_envelope.items
+
+    payload = event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    # See https://develop.sentry.dev/sdk/telemetry/traces/dynamic-sampling-context/#dsc-specification
+    trace_header = event_envelope.headers["trace"]
+    # assert for random value to exist & be in the expected range
+    assert ("sample_rand" in trace_header) and (0 <= trace_header["sample_rand"] < 1)
+    del trace_header["sample_rand"]
+    assert trace_header == {
+        "environment": "development",
+        "org_id": "",
+        "public_key": "uiaeosnrtdy",
+        "release": "test-example-release",
+        "sample_rate": 1,
+        "sampled": "true",
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "transaction": "little.teapot",
+    }
+
+    assert trace_context["trace_id"] == trace_header["trace_id"]
+
+
+def test_event_trace_header(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "set-trace", "capture-event"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 1
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Extract the one-and-only-item
+    (event,) = event_envelope.items
+
+    payload = event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    # See https://develop.sentry.dev/sdk/telemetry/traces/dynamic-sampling-context/#dsc-specification
+    trace_header = event_envelope.headers["trace"]
+    # assert for random value to exist & be in the expected range
+    assert ("sample_rand" in trace_header) and (0 <= trace_header["sample_rand"] < 1)
+    del trace_header["sample_rand"]
+    assert trace_header == {
+        "environment": "development",
+        "org_id": "",
+        "public_key": "uiaeosnrtdy",
+        "release": "test-example-release",
+        "sample_rate": 0,  # since we don't capture-transaction
+        "sampled": "false",  # now sample_rand >= traces_sample_rate (=0)
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+    }
+
+    assert trace_context["trace_id"] == trace_header["trace_id"]
+
+
+def test_set_trace_event(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "set-trace", "capture-event"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 1
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Extract the one-and-only-item
+    (event,) = event_envelope.items
+
+    payload = event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    assert_event(event_envelope, "Hello World!", "aaaabbbbccccddddeeeeffff00001111")
+    assert trace_context["parent_span_id"]
+    assert trace_context["parent_span_id"] == "f0f0f0f0f0f0f0f0"
+
+
+def test_set_trace_transaction_scoped_event(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "capture-transaction", "scope-transaction-event"],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 2
+    tx_req = httpserver.log[1][0]
+    tx_body = tx_req.get_data()
+
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    tx_envelope = Envelope.deserialize(tx_body)
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Show what the envelope looks like if the test fails.
+    tx_envelope.print_verbose()
+
+    # The transaction is overwritten.
+    assert_meta(
+        tx_envelope,
+        transaction="little.teapot",
+    )
+
+    # Extract the transaction and event items
+    (tx_event,) = tx_envelope.items
+    (event,) = event_envelope.items
+
+    assert tx_event.headers["type"] == "transaction"
+    payload = tx_event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+
+    assert trace_context["trace_id"]
+    tx_trace_id = uuid.UUID(hex=trace_context["trace_id"])
+    assert tx_trace_id
+    event_trace_id = uuid.UUID(hex=event.payload.json["contexts"]["trace"]["trace_id"])
+    # by default, transactions and events should have the same trace id (picked up from the propagation context)
+    assert tx_trace_id == event_trace_id
+    assert_event(event_envelope, "Hello World!", trace_context["trace_id"])
+    # scoped tx should have the same span_id as the event span_id
+    assert trace_context["span_id"]
+    assert (
+        trace_context["span_id"] == event.payload.json["contexts"]["trace"]["span_id"]
+    )
+
+
+def test_set_trace_transaction_update_from_header_event(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver), SENTRY_RELEASE="🤮🚀")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        [
+            "log",
+            "capture-transaction",
+            "update-tx-from-header",
+            "scope-transaction-event",
+        ],
+        check=True,
+        env=env,
+    )
+
+    assert len(httpserver.log) == 2
+    tx_req = httpserver.log[1][0]
+    tx_body = tx_req.get_data()
+
+    event_req = httpserver.log[0][0]
+    event_body = event_req.get_data()
+
+    tx_envelope = Envelope.deserialize(tx_body)
+    event_envelope = Envelope.deserialize(event_body)
+
+    # Show what the envelope looks like if the test fails.
+    tx_envelope.print_verbose()
+
+    # The transaction is overwritten.
+    assert_meta(
+        tx_envelope,
+        transaction="little.teapot",
+    )
+
+    # Extract the transaction and event items
+    (tx_event,) = tx_envelope.items
+    (event,) = event_envelope.items
+
+    assert tx_event.headers["type"] == "transaction"
+    payload = tx_event.payload.json
+
+    # See https://develop.sentry.dev/sdk/data-model/event-payloads/contexts/#trace-context
+    trace_context = payload["contexts"]["trace"]
+    expected_trace_id = "2674eb52d5874b13b560236d6c79ce8a"
+    expected_parent_span_id = "a0f9fdf04f1a63df"
+
+    assert trace_context["trace_id"]
+    assert event.payload.json["contexts"]["trace"]["trace_id"]
+    # Event should have the same trace_id as scoped span (set by update_from_header)
+    assert (
+        trace_context["trace_id"]
+        == event.payload.json["contexts"]["trace"]["trace_id"]
+        == expected_trace_id
+    )
+    assert_event(event_envelope, "Hello World!", trace_context["trace_id"])
+    # scoped tx should have the same span_id as the event span_id
+    assert trace_context["span_id"]
+    assert (
+        trace_context["span_id"] == event.payload.json["contexts"]["trace"]["span_id"]
+    )
+    # tx gets parent span_id from update_from_header
+    assert trace_context["parent_span_id"]
+    assert trace_context["parent_span_id"] == expected_parent_span_id
 
 
 def test_capture_minidump(cmake, httpserver):
@@ -604,7 +1037,7 @@ def test_capture_minidump(cmake, httpserver):
     run(
         tmp_path,
         "sentry_example",
-        ["log", "attachment", "capture-minidump"],
+        ["log", "attachment", "attach-view-hierarchy", "capture-minidump"],
         check=True,
         env=dict(os.environ, SENTRY_DSN=make_dsn(httpserver)),
     )
@@ -618,6 +1051,7 @@ def test_capture_minidump(cmake, httpserver):
 
     assert_breadcrumb(envelope)
     assert_attachment(envelope)
+    assert_attachment_view_hierarchy(envelope)
 
     assert_minidump(envelope)
 
@@ -847,3 +1281,33 @@ def test_capture_proxy(cmake, httpserver, run_args, proxy_running):
             expected_logsize = 0
     finally:
         proxy_test_finally(expected_logsize, httpserver, proxy_process)
+
+
+def test_capture_with_scope(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+
+    # make sure we are isolated from previous runs
+    shutil.rmtree(tmp_path / ".sentry-native", ignore_errors=True)
+
+    httpserver.expect_oneshot_request(
+        "/api/123456/envelope/",
+        headers={"x-sentry-auth": auth_header},
+    ).respond_with_data("OK")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        ["log", "attach-to-scope", "capture-with-scope"],
+        check=True,
+        env=dict(os.environ, SENTRY_DSN=make_dsn(httpserver)),
+    )
+
+    assert len(httpserver.log) == 1
+
+    req = httpserver.log[0][0]
+    body = req.get_data()
+
+    envelope = Envelope.deserialize(body)
+
+    assert_breadcrumb(envelope, "scoped crumb")
+    assert_attachment(envelope)

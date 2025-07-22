@@ -1,10 +1,102 @@
 # Changelog
 
+## Unreleased
+
+**Breaking changes**:
+- Change transaction sampling to be trace-based. Now, for a given `traces_sample_rate`, either all transactions in a trace get sampled or none do with probability equal to that sample rate. ([#1254](https://github.com/getsentry/sentry-native/pull/1254))
+
+**Features**:
+
+- Add `sentry_clear_attachments()` to allow clearing all previously added attachments in the global scope. ([#1290](https://github.com/getsentry/sentry-native/pull/1290))
+- Compiles also on Xbox One ([#1294](https://github.com/getsentry/sentry-native/pull/1294))
+- Provide `sentry_regenerate_trace()` to allow users to set manual trace boundaries. ([#1293](https://github.com/getsentry/sentry-native/pull/1293))
+- Add `Dynamic Sampling Context (DSC)` to events. ([#1254](https://github.com/getsentry/sentry-native/pull/1254))
+- Add `sentry_value_new_feedback` and `sentry_capture_feedback` to allow capturing [User Feedback](https://develop.sentry.dev/sdk/data-model/envelope-items/#user-feedback). ([#1304](https://github.com/getsentry/sentry-native/pull/1304))
+  - Deprecate `sentry_value_new_user_feedback` and `sentry_capture_user_feedback` in favor of the new API.
+
+**Fixes**:
+
+- Update Xbox toolchain to include `UseDebugLibraries` fix for Debug builds. ([#1302](https://github.com/getsentry/sentry-native/pull/1302))
+- Fix GDK version selection for Xbox by propagating `XdkEditionTarget` to MSBuild. ([#1312](https://github.com/getsentry/sentry-native/pull/1312))
+
+**Meta**:
+
+- Marked deprecated functions with `SENTRY_DEPRECATED(msg)`. ([#1308](https://github.com/getsentry/sentry-native/pull/1308))
+
+## 0.9.1
+
+**Features**:
+
+- The `sentry_attach_file/bytes`, `sentry_scope_attach_file/bytes` (and their wide-string variants), and `sentry_remove_attachment` have been added to modify the list of attachments that are sent along with sentry events after a call to `sentry_init`. ([#1266](https://github.com/getsentry/sentry-native/pull/1266), [#1275](https://github.com/getsentry/sentry-native/pull/1275))
+  - NOTE: When using the `crashpad` backend on macOS, the list of attachments that will be added at the time of a hard crash will be frozen at the time of `sentry_init`, and later modifications will not be reflected.
+- Add `sentry_attachment_set_content_type` to allow specifying the content type of attachments. ([#1276](https://github.com/getsentry/sentry-native/pull/1276))
+- Add `sentry_attachment_set_filename` to allow specifying the filename of attachments displayed in the Sentry WebUI. ([#1285](https://github.com/getsentry/sentry-native/pull/1285))
+
+**Meta**:
+
+- Identify Xbox as a separate SDK name `sentry.native.xbox`. ([#1287](https://github.com/getsentry/sentry-native/pull/1287))
+
+**Internal**:
+
+- Updated `breakpad` to 2025-06-13. ([#1277](https://github.com/getsentry/sentry-native/pull/1277), [breakpad#41](https://github.com/getsentry/breakpad/pull/41))
+
+## 0.9.0
+
+**Breaking changes**:
+
+- Limiting the proguard rules in the NDK package moves the burden of the configuration to its users. Please ensure to [configure proguard](http://proguard.sourceforge.net/manual/examples.html#native) in your project so native methods in your namespace can be symbolicated if they appear in stack traces. ([#1250](https://github.com/getsentry/sentry-native/pull/1250))
+- When tags, contexts, and extra data are applied to events, the event data now takes precedence over the scope data as outlined in the [Hub & Scope Refactoring](https://develop.sentry.dev/sdk/miscellaneous/hub_and_scope_refactoring/#how-is-scope-data-applied-to-events) developer document and the linked RFC [code example](https://github.com/getsentry/rfcs/blob/fn/merge-hub-scope/text/0122-sdk-hub-scope-merge.md#applying-scopes). ([#1253](https://github.com/getsentry/sentry-native/pull/1253))
+
+**Features**:
+
+- Provide `before_send_transaction` callback. ([#1236](https://github.com/getsentry/sentry-native/pull/1236))
+- Add support for capturing events with local scopes. ([#1248](https://github.com/getsentry/sentry-native/pull/1248))
+- Add Windows support for the `crashpad_wait_for_upload` flag. ([#1255](https://github.com/getsentry/sentry-native/pull/1255), [crashpad#126](https://github.com/getsentry/crashpad/pull/126))
+
+**Fixes**:
+
+- Reduce the scope of the proguard rules in the NDK package to local namespaces. ([#1250](https://github.com/getsentry/sentry-native/pull/1250))
+- Close the file and return 0 on success when writing raw envelopes. ([#1260](https://github.com/getsentry/sentry-native/pull/1260))
+- Fix event tags, contexts, and extra data to take precedence when applying scope data. ([#1253](https://github.com/getsentry/sentry-native/pull/1253))
+
+**Docs**:
+
+- Document convenience PowerShell runners for formatting and tests on Windows. ([#1247](https://github.com/getsentry/sentry-native/pull/1247))
+
+## 0.8.5
+
+**Breaking changes**:
+
+- Use `propagation_context` as the single source of `trace_id` for spans and events. Transactions no longer create a new trace, but inherit the trace from the `propagation_context` created during SDK initialization. This context can be later modified through `sentry_set_trace()` (primarily used by other SDKs). ([#1200](https://github.com/getsentry/sentry-native/pull/1200))
+
+**Features**:
+
+- Add `sentry_value_new_user(id, username, email, ip_address)` function to avoid ambiguous user-context-keys. ([#1228](https://github.com/getsentry/sentry-native/pull/1228))
+
+**Fixes**:
+
+- Remove compile-time check for the `libcurl` feature `AsynchDNS`. ([#1206](https://github.com/getsentry/sentry-native/pull/1206))
+- Support musl on Linux. ([#1233](https://github.com/getsentry/sentry-native/pull/1233))
+
+**Thank you**:
+
+- [gregcotten](https://github.com/gregcotten)
+
+## 0.8.4
+
+**Features**:
+
+- Provide an option for downstream SDKs to attach a view hierarchy file. ([#1191](https://github.com/getsentry/sentry-native/pull/1191))
+
+**Fixes**:
+
+- Provide a more defensive automatic thread stack guarantee. ([#1196](https://github.com/getsentry/sentry-native/pull/1196))
+
 ## 0.8.3
 
 **Features**:
 
-- Add option to attach screenshots on Windows to fatal error events. ([#1170](https://github.com/getsentry/sentry-native/pull/1170), [crashpad#123](https://github.com/getsentry/crashpad/pull/123))
+- Add an option to attach screenshots on Windows to fatal error events. ([#1170](https://github.com/getsentry/sentry-native/pull/1170), [crashpad#123](https://github.com/getsentry/crashpad/pull/123))
 - Add an option for `Crashpad` on Linux to delay application shutdown until the upload of the crash report in the `crashpad_handler` is complete. This is useful for deployment in `Docker` or `systemd`, where the life cycle of additional processes is bound by the application life cycle. ([#1153](https://github.com/getsentry/sentry-native/pull/1153), [crashpad#121](https://github.com/getsentry/crashpad/pull/121))
 - Expose `traces_sample_rate` option for synchronization with Android SDK. ([#1176](https://github.com/getsentry/sentry-native/pull/1176))
 
