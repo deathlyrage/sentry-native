@@ -67,6 +67,7 @@ CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
 tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
+export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/lib64/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
 ./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --with-zlib="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --with-openssl="$UE_TOOLCHAIN_PATH"
 make -j$(nproc)
 make install
