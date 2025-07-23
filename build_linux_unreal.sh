@@ -64,29 +64,37 @@ make -j$(nproc)
 make install
 cd ../..
 
-# Set libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
+# Build libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
 LIBPSL_VER="0.21.5"
 wget https://github.com/rockdaboot/libpsl/releases/download/$LIBPSL_VER/libpsl-$LIBPSL_VER.tar.gz
 tar xf libpsl-$LIBPSL_VER.tar.gz
 rm libpsl-$LIBPSL_VER.tar.gz
 cd libpsl-$LIBPSL_VER
-# Set PKG_CONFIG_PATH so that any dependencies installed to sysroot can be found
-export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
-# Configure for your sysroot
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --disable-tools
-make -C include install
-make -C src install
-make -C po install
-#make -j$(nproc)
-#make install
+
+# Configure libpsl properly
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
+    --disable-shared \
+    --enable-static \
+    --disable-tools \
+    --with-libiconv-prefix="$UE_TOOLCHAIN_PATH/usr" \
+    --with-libidn2=no \
+    --with-libicu="$UE_TOOLCHAIN_PATH/usr"
+# Build and install the complete library
+make -j$(nproc)
+make install
+cd ..
 
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
 tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
-export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/lib64/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --with-zlib="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --with-openssl="$UE_TOOLCHAIN_PATH/usr"
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
+    --with-zlib="$UE_TOOLCHAIN_PATH/usr" \
+    --disable-shared \
+    --enable-static \
+    --with-openssl="$UE_TOOLCHAIN_PATH/usr" \
+    --enable-libpsl
 make -j$(nproc)
 make install
 cd ..
