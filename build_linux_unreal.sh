@@ -66,24 +66,24 @@ make -j$(nproc)
 make install
 cd ../..
 
-# Build libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
-LIBPSL_VER="0.21.5"
-wget https://github.com/rockdaboot/libpsl/releases/download/$LIBPSL_VER/libpsl-$LIBPSL_VER.tar.gz
-tar xf libpsl-$LIBPSL_VER.tar.gz
-rm libpsl-$LIBPSL_VER.tar.gz
-cd libpsl-$LIBPSL_VER
-
-# Configure libpsl properly
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
-    --disable-shared \
-    --enable-static \
-    --disable-tools \
-    --with-libiconv-prefix="$UE_TOOLCHAIN_PATH/usr" \
-    --with-libidn2=no \
-    --with-libicu="$UE_TOOLCHAIN_PATH/usr"
-# Build and install the complete library
-make -j$(nproc) install-exec
-cd ..
+## Build libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
+#LIBPSL_VER="0.21.5"
+#wget https://github.com/rockdaboot/libpsl/releases/download/$LIBPSL_VER/libpsl-$LIBPSL_VER.tar.gz
+#tar xf libpsl-$LIBPSL_VER.tar.gz
+#rm libpsl-$LIBPSL_VER.tar.gz
+#cd libpsl-$LIBPSL_VER
+#
+## Configure libpsl properly
+#./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
+#    --disable-shared \
+#    --enable-static \
+#    --disable-tools \
+#    --with-libiconv-prefix="$UE_TOOLCHAIN_PATH/usr" \
+#    --with-libidn2=no \
+#    --with-libicu="$UE_TOOLCHAIN_PATH/usr"
+## Build and install the complete library
+#make -j$(nproc) install-exec
+#cd ..
 
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
@@ -95,8 +95,7 @@ cd curl-$CURL_VER
     --disable-shared \
     --enable-static \
     --with-openssl="$UE_TOOLCHAIN_PATH/usr" \
-    --with-libpsl="$UE_TOOLCHAIN_PATH/usr" \
-    PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/lib64/pkgconfig"
+    --without-libpsl
 make -j$(nproc)
 make install
 
