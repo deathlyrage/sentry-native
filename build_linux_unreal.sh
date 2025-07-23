@@ -95,6 +95,7 @@ export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
 export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
 export CFLAGS="--sysroot=${SYSROOT}"
 export LDFLAGS="--sysroot=${SYSROOT}"
+export PATH="$(pwd)/bin:$PATH"
 
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
