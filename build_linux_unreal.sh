@@ -30,7 +30,7 @@ rm -rf "install"
 wget https://zlib.net/zlib-1.3.1.tar.gz
 tar xf zlib-1.3.1.tar.gz
 cd zlib-1.3.1
-./configure --prefix="$UE_TOOLCHAIN_PATH"
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr"
 make -j$(nproc)
 make install
 cd ..
@@ -40,7 +40,7 @@ OPENSSL_VER="3.5.1"
 wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
 cd openssl-$OPENSSL_VER
-./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH" no-shared no-shared no-tests no-docs no-docs
+./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
 make -j$(nproc)
 make install_sw
 cd ..
@@ -50,7 +50,7 @@ CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
 tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
-./configure --prefix="$UE_TOOLCHAIN_PATH" --with-zlib="$UE_TOOLCHAIN_PATH" --disable-shared --enable-static --with-openssl="$UE_TOOLCHAIN_PATH"
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --with-zlib="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --with-openssl="$UE_TOOLCHAIN_PATH"
 make -j$(nproc)
 make install
 cd ..
