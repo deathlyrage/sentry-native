@@ -1,6 +1,6 @@
 #!/bin/bash
 # Toolchain download information
-TOOLCHAIN_VER="v22_clang-16.0.6-centos7"
+TOOLCHAIN_VER="v25_clang-18.1.0-rockylinux8"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="unreal_toolchain"
@@ -23,8 +23,37 @@ rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
-export CC="$UE_TOOLCHAIN_PATH/bin/clang"
-export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
+#export CC="$UE_TOOLCHAIN_PATH/bin/clang"
+#export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
+
+# Install Zlib in Sysroot
+wget https://zlib.net/zlib-1.3.1.tar.gz
+tar xf zlib-1.3.1.tar.gz
+cd zlib-1.3.1
+./configure --prefix="$UE_TOOLCHAIN_PATH"
+make -j$(nproc)
+make install
+cd ..
+
+# Install OpenSSL in Sysroot
+OPENSSL_VER="3.5.1"
+wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
+tar xf openssl-$OPENSSL_VER.tar.gz
+cd openssl-$OPENSSL_VER
+./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH" no-shared no-shared no-tests no-docs no-docs
+make -j$(nproc)
+make install_sw
+cd ..
+
+# Install Curl in Sysroot							
+CURL_VER="8.15.0"
+wget https://curl.se/download/curl-$CURL_VER.tar.gz
+tar xf curl-$CURL_VER.tar.gz
+cd curl-$CURL_VER
+./configure --prefix="$UE_TOOLCHAIN_PATH" --with-zlib="$UE_TOOLCHAIN_PATH" --disable-shared --enable-static --with-openssl="$UE_TOOLCHAIN_PATH"
+make -j$(nproc)
+make install
+cd ..
 
 # Configure sentry-native with Unreal's toolchain
 cmake -B "build" \
@@ -32,10 +61,12 @@ cmake -B "build" \
 	-DSENTRY_BACKEND=crashpad \
 	-DSENTRY_TRANSPORT=none \
 	-DBUILD_SHARED_LIBS=ON \
-	-DCRASHPAD_ZLIB_SYSTEM=OFF \
-    -DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so \
-    -DCURL_LIBRARY=/usr/lib/x86_64-linux-gnu/libcurl.so \
-    -DCURL_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/curl \
+	-DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so \
+	-DCURL_LIBRARY=/usr/lib/x86_64-linux-gnu/libcurl.so \
+	-DCURL_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/curl \
+	-DCMAKE_CXX_STANDARD=17 \
+	-DCMAKE_CXX_STANDARD_REQUIRED=ON \
+	-DCMAKE_CXX_EXTENSIONS=OFF \
 	-DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH"
 
 #-DCMAKE_TOOLCHAIN_FILE="$UE_TOOLCHAIN_PATH/cmake/UE4Toolchain.cmake"

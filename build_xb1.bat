@@ -2,7 +2,7 @@
 
 set SRC_DIR=%~dp0
 
-call "C:\Program Files (x86)\Microsoft GDK\Command Prompts\GamingXboxVars.cmd" GamingXboxVS2022 240301
+REM call "C:\Program Files (x86)\Microsoft GDK\Command Prompts\GamingXboxVars.cmd" GamingXboxVS2022 240301
 
 cd /D %SRC_DIR%
 
@@ -13,7 +13,7 @@ cmake --version
 
 SET BUILD_TYPE="RelWithDebInfo"
 
-cmake -B build -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DSENTRY_BACKEND=crashpad -DSENTRY_TRANSPORT=none -DCMAKE_GENERATOR_PLATFORM=Gaming.Xbox.XboxOne.x64 -DBUILD_SHARED_LIBS=ON -DCMAKE_SYSTEM_VERSION=10 -DSENTRY_WITH_LIBBACKTRACE=true
+cmake -B build -DCMAKE_BUILD_TYPE=%BUILD_TYPE% -DSENTRY_BACKEND=none -DSENTRY_TRANSPORT=none -DSENTRY_BUILD_TESTS=OFF -DSENTRY_BUILD_EXAMPLES=OFF -A Gaming.Xbox.XboxOne.x64 -DCMAKE_TOOLCHAIN_FILE="./toolchains/xbox/gxdk_toolchain.cmake" -DBUILD_SHARED_LIBS=ON -DCMAKE_SYSTEM_VERSION=10 -DSENTRY_WITH_LIBBACKTRACE=true
 cmake --build build --parallel --config %BUILD_TYPE%
 cmake --install build --prefix install --config %BUILD_TYPE%
 
