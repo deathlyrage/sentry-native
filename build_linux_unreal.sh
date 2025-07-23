@@ -50,7 +50,7 @@ make install_sw
 cd ..
 
 # Build ICU
-ICU_VER="77_1"
+ICU_VER="77-1"
 ICU_TAR="icu4c-${ICU_VER}-src.tgz"
 wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER}/${ICU_TAR}"
 tar xf "${ICU_TAR}"
