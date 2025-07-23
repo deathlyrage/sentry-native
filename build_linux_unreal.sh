@@ -74,8 +74,11 @@ cd libpsl-$LIBPSL_VER
 export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
 # Configure for your sysroot
 ./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --disable-tools
-make -j$(nproc)
-make install
+make -C include install
+make -C src install
+make -C po install
+#make -j$(nproc)
+#make install
 
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
