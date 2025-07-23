@@ -97,6 +97,12 @@ cd curl-$CURL_VER
     PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/lib64/pkgconfig"
 make -j$(nproc)
 make install
+
+if [ $? -ne 0 ]; then
+    echo "curl build failed, exiting."
+    exit 1
+fi
+
 cd ..
 
 # Configure sentry-native with Unreal's toolchain
