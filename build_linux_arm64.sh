@@ -99,8 +99,8 @@ CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
 tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
-unset LD_LIBRARY_PATH
-unset PKG_CONFIG_PATH
+#unset LD_LIBRARY_PATH
+#unset PKG_CONFIG_PATH
 ./configure \
   --host=${ARCH}-unknown-linux-gnu \
   --build=$(gcc -dumpmachine) \
