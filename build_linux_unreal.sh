@@ -25,8 +25,17 @@ rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
-#export CC="$UE_TOOLCHAIN_PATH/bin/clang"
-#export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
+export SYSROOT=$UE_TOOLCHAIN_PATH
+export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
+export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
+export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
+export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
+export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
+export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
+export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
+export CFLAGS="--sysroot=${SYSROOT}"
+export LDFLAGS="--sysroot=${SYSROOT}"
+export PATH="$(pwd)/bin:$PATH"
 
 # Install Zlib in Sysroot
 ZLIB_VER="1.3.1"
@@ -84,18 +93,6 @@ cd ../..
 ## Build and install the complete library
 #make -j$(nproc) install-exec
 #cd ..
-
-export SYSROOT=$UE_TOOLCHAIN_PATH
-export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
-export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
-export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
-export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
-export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
-export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
-export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
-export CFLAGS="--sysroot=${SYSROOT}"
-export LDFLAGS="--sysroot=${SYSROOT}"
-export PATH="$(pwd)/bin:$PATH"
 
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
