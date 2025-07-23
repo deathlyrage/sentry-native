@@ -3,23 +3,21 @@
 TOOLCHAIN_VER="v25_clang-18.1.0-rockylinux8"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
-TOOLCHAIN_DIR="unreal_toolchain"
+TOOLCHAIN_DIR="$TOOLCHAIN_VER"     # <--- Use version as dir
 
-rm -rf $TOOLCHAIN_DIR || true
+rm -rf "$TOOLCHAIN_DIR" || true
 
-# Download the Unreal Engine Linux Toolchain if it's not already present
 if [ ! -d "$TOOLCHAIN_DIR" ]; then
-	echo "Downloading Unreal Engine Linux Toolchain..."
-	wget "$TOOLCHAIN_URL"
+    echo "Downloading Unreal Engine Linux Toolchain..."
+    wget "$TOOLCHAIN_URL"
 
-	echo "Extracting Toolchain..."
-	mkdir "$TOOLCHAIN_DIR"
-	tar -xzvf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
-	rm "$TOOLCHAIN_ARCHIVE"
+    echo "Extracting Toolchain..."
+    mkdir "$TOOLCHAIN_DIR"
+    tar -xzvf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
+    rm "$TOOLCHAIN_ARCHIVE"
 fi
 
-# Set the path to the extracted toolchain
-UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/$TOOLCHAIN_VER/x86_64-unknown-linux-gnu"
+UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/x86_64-unknown-linux-gnu"
 
 rm -rf "build"
 rm -rf "install"
