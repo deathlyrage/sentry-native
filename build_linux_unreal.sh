@@ -28,6 +28,7 @@ rm -rf "install"
 export SYSROOT=$UE_TOOLCHAIN_PATH
 export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
 export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
+export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/x86_64-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
 export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
 export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
 export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
