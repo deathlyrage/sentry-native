@@ -55,7 +55,7 @@ wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
 rm openssl-$OPENSSL_VER.tar.gz
 cd openssl-$OPENSSL_VER
-./Configure linux-aarch64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
+./Configure linux-${ARCH} --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
 make -j$(nproc)
 make install_sw
 cd ..
@@ -102,6 +102,8 @@ cd curl-$CURL_VER
 unset LD_LIBRARY_PATH
 unset PKG_CONFIG_PATH
 ./configure \
+  --host=${ARCH}-unknown-linux-gnu \
+  --build=$(gcc -dumpmachine) \
   --prefix=$SYSROOT/usr \
   --with-ssl \
   --without-libpsl \
@@ -113,7 +115,7 @@ unset PKG_CONFIG_PATH
 make -j$(nproc)
 make install
 
-  #--host=x86_64-unknown-linux-gnu \
+  #--host=${ARCH}-unknown-linux-gnu \
   #--build=$(gcc -dumpmachine) \
 
 if [ $? -ne 0 ]; then
@@ -136,8 +138,8 @@ cmake -B build \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_CXX_EXTENSIONS=OFF \
     -DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH" \
-    -DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/aarch64-unknown-linux-gnu-gcc" \
-    -DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/aarch64-unknown-linux-gnu-g++" \
+    -DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/${ARCH}-unknown-linux-gnu-gcc" \
+    -DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/${ARCH}-unknown-linux-gnu-g++" \
     -DCMAKE_FIND_ROOT_PATH="$UE_TOOLCHAIN_PATH" \
     -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
