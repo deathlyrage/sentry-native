@@ -93,7 +93,8 @@ cd curl-$CURL_VER
     --disable-shared \
     --enable-static \
     --with-openssl="$UE_TOOLCHAIN_PATH/usr" \
-    --enable-libpsl
+    --with-libpsl="$UE_TOOLCHAIN_PATH/usr" \
+    PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/lib64/pkgconfig"
 make -j$(nproc)
 make install
 cd ..
