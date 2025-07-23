@@ -61,9 +61,10 @@ cmake -B "build" \
 	-DSENTRY_BACKEND=crashpad \
 	-DSENTRY_TRANSPORT=none \
 	-DBUILD_SHARED_LIBS=ON \
-	-DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so \
-	-DCURL_LIBRARY=/usr/lib/x86_64-linux-gnu/libcurl.so \
-	-DCURL_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/curl \
+    -DZLIB_LIBRARY="$UE_TOOLCHAIN_PATH/usr/lib/libz.so" \
+    -DZLIB_INCLUDE_DIR="$UE_TOOLCHAIN_PATH/usr/include" \
+    -DCURL_LIBRARY="$UE_TOOLCHAIN_PATH/usr/lib/libcurl.so" \
+    -DCURL_INCLUDE_DIR="$UE_TOOLCHAIN_PATH/usr/include/curl" \
 	-DCMAKE_CXX_STANDARD=17 \
 	-DCMAKE_CXX_STANDARD_REQUIRED=ON \
 	-DCMAKE_CXX_EXTENSIONS=OFF \
