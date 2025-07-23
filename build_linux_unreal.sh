@@ -16,6 +16,7 @@ if [ ! -d "$TOOLCHAIN_DIR" ]; then
     rm "$TOOLCHAIN_ARCHIVE"
 fi
 
+ARCH="x86_64"
 UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/x86_64-unknown-linux-gnu"
 
 rm -rf "build"
@@ -23,17 +24,17 @@ rm -rf "install"
 
 # Set the compilers to use Unreal's versions
 export SYSROOT=$UE_TOOLCHAIN_PATH
-export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
-export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
-export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/x86_64-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
-export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
-export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
-export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
-export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
+export CC=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-gcc
+export CXX=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-g++
+export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/${ARCH}-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
+export AR=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ar
+export RANLIB=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ranlib
+export STRIP=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-strip
+export PKG_CONFIG=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-pkg-config
 export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
 export CFLAGS="--sysroot=${SYSROOT}"
 export LDFLAGS="--sysroot=${SYSROOT}"
-export LD=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ld
+export LD=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ld
 export PATH=${SYSROOT}/bin:$PATH
 
 # Install Zlib in Sysroot
