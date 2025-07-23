@@ -5,7 +5,7 @@ TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLC
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="unreal_toolchain"
 
-rm -rf $TOOLCHAIN_DIR || true
+#rm -rf $TOOLCHAIN_DIR || true
 
 # Download the Unreal Engine Linux Toolchain if it's not already present
 if [ ! -d "$TOOLCHAIN_DIR" ]; then
@@ -85,6 +85,17 @@ cd ../..
 #make -j$(nproc) install-exec
 #cd ..
 
+export SYSROOT=$UE_TOOLCHAIN_PATH
+export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
+export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
+export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
+export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
+export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
+export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
+export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
+export CFLAGS="--sysroot=${SYSROOT}"
+export LDFLAGS="--sysroot=${SYSROOT}"
+
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
@@ -92,13 +103,17 @@ tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
 unset LD_LIBRARY_PATH
 unset PKG_CONFIG_PATH
-
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
-    --with-zlib="$UE_TOOLCHAIN_PATH/usr" \
-    --disable-shared \
-    --enable-static \
-    --with-openssl="$UE_TOOLCHAIN_PATH/usr" \
-    --without-libpsl
+./configure \
+  --host=x86_64-unknown-linux-gnu \
+  --build=$(gcc -dumpmachine) \
+  --prefix=$SYSROOT/usr \
+  --with-ssl \
+  --without-libpsl \
+  --disable-ldap \
+  --disable-rtsp \
+  --disable-manual \
+  --disable-shared \
+  --enable-static
 make -j$(nproc)
 make install
 
