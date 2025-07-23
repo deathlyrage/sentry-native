@@ -42,19 +42,23 @@ rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
-export SYSROOT=$UE_TOOLCHAIN_PATH
-export CC=${SYSROOT}/bin/${ARCH_TRIPLET}-gcc
-export CXX=${SYSROOT}/bin/${ARCH_TRIPLET}-g++
-export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/${ARCH_TRIPLET} -I$UE_TOOLCHAIN_PATH/include"
-export AR=${SYSROOT}/bin/${ARCH_TRIPLET}-ar
-export RANLIB=${SYSROOT}/bin/${ARCH_TRIPLET}-ranlib
-export STRIP=${SYSROOT}/bin/${ARCH_TRIPLET}-strip
-export PKG_CONFIG=${SYSROOT}/bin/${ARCH_TRIPLET}-pkg-config
-export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
-export CFLAGS="--sysroot=${SYSROOT}"
-export LDFLAGS="--sysroot=${SYSROOT}"
-export LD=${SYSROOT}/bin/${ARCH_TRIPLET}-ld
-export PATH=${SYSROOT}/bin:$PATH
+export SYSROOT="$UE_TOOLCHAIN_PATH"
+export CC="${SYSROOT}/bin/${ARCH_TRIPLET}-gcc"
+export CXX="${SYSROOT}/bin/${ARCH_TRIPLET}-g++"
+export AR="${SYSROOT}/bin/${ARCH_TRIPLET}-ar"
+export RANLIB="${SYSROOT}/bin/${ARCH_TRIPLET}-ranlib"
+export STRIP="${SYSROOT}/bin/${ARCH_TRIPLET}-strip"
+export PKG_CONFIG="${SYSROOT}/bin/${ARCH_TRIPLET}-pkg-config"
+export PKG_CONFIG_LIBDIR="${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig"
+export LD="${SYSROOT}/bin/${ARCH_TRIPLET}-ld"
+export PATH="${SYSROOT}/bin:$PATH"
+
+# Add sysroot and necessary include paths to CFLAGS and CXXFLAGS
+export CFLAGS="--sysroot=${SYSROOT} -I${SYSROOT}/include"
+export CXXFLAGS="--sysroot=${SYSROOT} -I${SYSROOT}/include -I${SYSROOT}/include/c++/8.5.0 -I${SYSROOT}/include/c++/8.5.0/${ARCH_TRIPLET}"
+
+# Add sysroot and lib path to LDFLAGS
+export LDFLAGS="--sysroot=${SYSROOT} -L${SYSROOT}/lib -L${SYSROOT}/lib64 -L${SYSROOT}/usr/lib -L${SYSROOT}/usr/lib64"
 
 # Install Zlib in Sysroot
 ZLIB_VER="1.3.1"
