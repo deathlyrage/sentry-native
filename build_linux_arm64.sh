@@ -19,20 +19,20 @@ if [ ! -d "$TOOLCHAIN_DIR" ]; then
 fi
 
 # Set the path to the extracted toolchain
-UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/$TOOLCHAIN_VER/x86_64-unknown-linux-gnu"
+UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/$TOOLCHAIN_VER/aarch64-unknown-linux-gnu"
 
 rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
 export SYSROOT=$UE_TOOLCHAIN_PATH
-export CC=${SYSROOT}/bin/x86_64-unknown-linux-gnu-gcc
-export CXX=${SYSROOT}/bin/x86_64-unknown-linux-gnu-g++
-export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/x86_64-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
-export AR=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ar
-export RANLIB=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ranlib
-export STRIP=${SYSROOT}/bin/x86_64-unknown-linux-gnu-strip
-export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
+export CC=${SYSROOT}/bin/aarch64-unknown-linux-gnu-gcc
+export CXX=${SYSROOT}/bin/aarch64-unknown-linux-gnu-g++
+export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/aarch64-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
+export AR=${SYSROOT}/bin/aarch64-unknown-linux-gnu-ar
+export RANLIB=${SYSROOT}/bin/aarch64-unknown-linux-gnu-ranlib
+export STRIP=${SYSROOT}/bin/aarch64-unknown-linux-gnu-strip
+export PKG_CONFIG=${SYSROOT}/bin/aarch64-unknown-linux-gnu-pkg-config
 export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
 export CFLAGS="--sysroot=${SYSROOT}"
 export LDFLAGS="--sysroot=${SYSROOT}"
@@ -56,7 +56,7 @@ wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
 rm openssl-$OPENSSL_VER.tar.gz
 cd openssl-$OPENSSL_VER
-./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
+./Configure linux-aarch64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
 make -j$(nproc)
 make install_sw
 cd ..
@@ -103,7 +103,7 @@ cd curl-$CURL_VER
 unset LD_LIBRARY_PATH
 unset PKG_CONFIG_PATH
 ./configure \
-  --host=x86_64-unknown-linux-gnu \
+  --host=aarch64-unknown-linux-gnu \
   --build=$(gcc -dumpmachine) \
   --prefix=$SYSROOT/usr \
   --with-ssl \
@@ -136,8 +136,8 @@ cmake -B build \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_CXX_EXTENSIONS=OFF \
     -DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH" \
-    -DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/x86_64-unknown-linux-gnu-gcc" \
-    -DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/x86_64-unknown-linux-gnu-g++" \
+    -DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/aarch64-unknown-linux-gnu-gcc" \
+    -DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/aarch64-unknown-linux-gnu-g++" \
     -DCMAKE_FIND_ROOT_PATH="$UE_TOOLCHAIN_PATH" \
     -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
