@@ -100,8 +100,6 @@ cd curl-$CURL_VER
 unset LD_LIBRARY_PATH
 unset PKG_CONFIG_PATH
 ./configure \
-  --host=aarch64-unknown-linux-gnu \
-  --build=$(gcc -dumpmachine) \
   --prefix=$SYSROOT/usr \
   --with-ssl \
   --without-libpsl \
@@ -112,6 +110,9 @@ unset PKG_CONFIG_PATH
   --enable-static
 make -j$(nproc)
 make install
+
+  #--host=x86_64-unknown-linux-gnu \
+  #--build=$(gcc -dumpmachine) \
 
 if [ $? -ne 0 ]; then
     echo "curl build failed, exiting."
