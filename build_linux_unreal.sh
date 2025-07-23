@@ -45,6 +45,18 @@ make -j$(nproc)
 make install_sw
 cd ..
 
+# Set libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
+LIBPSL_VER="0.21.5"
+wget https://github.com/rockdaboot/libpsl/releases/download/$LIBPSL_VER/libpsl-$LIBPSL_VER.tar.gz
+tar xf libpsl-$LIBPSL_VER.tar.gz
+cd libpsl-$LIBPSL_VER
+# Set PKG_CONFIG_PATH so that any dependencies installed to sysroot can be found
+export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
+# Configure for your sysroot
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static
+make -j$(nproc)
+make install
+
 # Install Curl in Sysroot							
 CURL_VER="8.15.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
