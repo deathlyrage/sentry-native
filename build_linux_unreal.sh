@@ -33,6 +33,8 @@ export PKG_CONFIG=${SYSROOT}/bin/x86_64-unknown-linux-gnu-pkg-config
 export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
 export CFLAGS="--sysroot=${SYSROOT}"
 export LDFLAGS="--sysroot=${SYSROOT}"
+export LD=${SYSROOT}/bin/x86_64-unknown-linux-gnu-ld
+
 #export PATH="$(pwd)/bin:$PATH"
 
 # Install Zlib in Sysroot
