@@ -50,17 +50,19 @@ make install_sw
 cd ..
 
 # Build ICU
-ICU_VER="77-1"
+ICU_MAJOR=77
+ICU_MINOR=1
+ICU_VER="${ICU_MAJOR}_${ICU_MINOR}"
+ICU_VER_DASH="${ICU_MAJOR}-${ICU_MINOR}"
 ICU_TAR="icu4c-${ICU_VER}-src.tgz"
-wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER}/${ICU_TAR}"
+wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER_DASH}/${ICU_TAR}"
 tar xf "${ICU_TAR}"
-rm -rf "${ICU_TAR}"
+rm "${ICU_TAR}"
 cd icu/source
 ./configure --prefix="$UE_TOOLCHAIN_PATH/usr"
 make -j$(nproc)
 make install
 cd ../..
-rm -rf icu "${ICU_TAR}"
 
 # Set libpsl version (check https://github.com/rockdaboot/libpsl/releases for latest)
 LIBPSL_VER="0.21.5"
