@@ -1,4 +1,24 @@
 #!/bin/bash
+set -e
+
+# Accept "x86_64" or "aarch64" as the first argument
+ARCH="$1"
+
+if [ -z "$ARCH" ]; then
+    echo "Usage: $0 <x86_64|aarch64>"
+    exit 1
+fi
+
+if [ "$ARCH" = "aarch64" ]; then
+    ARCH_TRIPLET="aarch64-unknown-linux-gnueabi"
+elif [ "$ARCH" = "x86_64" ]; then
+    ARCH_TRIPLET="x86_64-unknown-linux-gnu"
+else
+    echo "Unknown ARCH: $ARCH"
+    exit 1
+fi
+
+
 # Toolchain download information
 TOOLCHAIN_VER="v25_clang-18.1.0-rockylinux8"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
@@ -14,17 +34,6 @@ if [ ! -d "$TOOLCHAIN_DIR" ]; then
     echo "Extracting Toolchain..."
     tar -xzvf "$TOOLCHAIN_ARCHIVE"
     rm "$TOOLCHAIN_ARCHIVE"
-fi
-
-ARCH="x86_64"
-
-if [ "$ARCH" = "aarch64" ]; then
-  ARCH_TRIPLET="aarch64-unknown-linux-gnueabi"
-elif [ "$ARCH" = "x86_64" ]; then
-  ARCH_TRIPLET="x86_64-unknown-linux-gnu"
-else
-  echo "Unknown ARCH"
-  exit 1
 fi
 
 UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/${ARCH_TRIPLET}"
