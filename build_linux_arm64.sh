@@ -12,8 +12,7 @@ if [ ! -d "$TOOLCHAIN_DIR" ]; then
     wget "$TOOLCHAIN_URL"
 
     echo "Extracting Toolchain..."
-    mkdir "$TOOLCHAIN_DIR"
-    tar -xzvf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
+    tar -xzvf "$TOOLCHAIN_ARCHIVE"
     rm "$TOOLCHAIN_ARCHIVE"
 fi
 
