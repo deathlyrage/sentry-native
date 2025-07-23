@@ -67,7 +67,9 @@ wget "$ZLIB_URL"
 tar xf "zlib-$ZLIB_VER.tar.gz"
 rm "zlib-$ZLIB_VER.tar.gz"
 cd "zlib-$ZLIB_VER"
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr"
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" \
+    CC="$UE_TOOLCHAIN_PATH/bin/${ARCH_TRIPLET}-gcc" \
+    AR="$UE_TOOLCHAIN_PATH/bin/${ARCH_TRIPLET}-ar"
 make -j$(nproc)
 make install
 cd ..
