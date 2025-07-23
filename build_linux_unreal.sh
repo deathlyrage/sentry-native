@@ -80,8 +80,7 @@ cd libpsl-$LIBPSL_VER
     --with-libidn2=no \
     --with-libicu="$UE_TOOLCHAIN_PATH/usr"
 # Build and install the complete library
-make -j$(nproc)
-make install
+make -j$(nproc) install-exec
 cd ..
 
 # Install Curl in Sysroot							
