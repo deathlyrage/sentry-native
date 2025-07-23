@@ -3,7 +3,7 @@
 TOOLCHAIN_VER="v25_clang-18.1.0-rockylinux8"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
-TOOLCHAIN_DIR="$TOOLCHAIN_VER"     # <--- Use version as dir
+TOOLCHAIN_DIR="$TOOLCHAIN_VER"
 
 rm -rf "$TOOLCHAIN_DIR" || true
 
@@ -17,24 +17,34 @@ if [ ! -d "$TOOLCHAIN_DIR" ]; then
 fi
 
 ARCH="x86_64"
-UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/x86_64-unknown-linux-gnu"
+
+if [ "$ARCH" = "aarch64" ]; then
+  ARCH_TRIPLET="aarch64-unknown-linux-gnueabi"
+elif [ "$ARCH" = "x86_64" ]; then
+  ARCH_TRIPLET="x86_64-unknown-linux-gnu"
+else
+  echo "Unknown ARCH"
+  exit 1
+fi
+
+UE_TOOLCHAIN_PATH="$PWD/$TOOLCHAIN_DIR/${ARCH_TRIPLET}"
 
 rm -rf "build"
 rm -rf "install"
 
 # Set the compilers to use Unreal's versions
 export SYSROOT=$UE_TOOLCHAIN_PATH
-export CC=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-gcc
-export CXX=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-g++
-export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/${ARCH}-unknown-linux-gnu -I$UE_TOOLCHAIN_PATH/include"
-export AR=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ar
-export RANLIB=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ranlib
-export STRIP=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-strip
-export PKG_CONFIG=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-pkg-config
+export CC=${SYSROOT}/bin/${ARCH_TRIPLET}-gcc
+export CXX=${SYSROOT}/bin/${ARCH_TRIPLET}-g++
+export CXXFLAGS="-I$UE_TOOLCHAIN_PATH/include/c++/8.5.0 -I$UE_TOOLCHAIN_PATH/include/c++/8.5.0/${ARCH_TRIPLET} -I$UE_TOOLCHAIN_PATH/include"
+export AR=${SYSROOT}/bin/${ARCH_TRIPLET}-ar
+export RANLIB=${SYSROOT}/bin/${ARCH_TRIPLET}-ranlib
+export STRIP=${SYSROOT}/bin/${ARCH_TRIPLET}-strip
+export PKG_CONFIG=${SYSROOT}/bin/${ARCH_TRIPLET}-pkg-config
 export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
 export CFLAGS="--sysroot=${SYSROOT}"
 export LDFLAGS="--sysroot=${SYSROOT}"
-export LD=${SYSROOT}/bin/${ARCH}-unknown-linux-gnu-ld
+export LD=${SYSROOT}/bin/${ARCH_TRIPLET}-ld
 export PATH=${SYSROOT}/bin:$PATH
 
 # Install Zlib in Sysroot
@@ -55,7 +65,7 @@ wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
 rm openssl-$OPENSSL_VER.tar.gz
 cd openssl-$OPENSSL_VER
-./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
+./Configure linux-${ARCH} --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
 make -j$(nproc)
 make install_sw
 cd ..
@@ -102,6 +112,8 @@ cd curl-$CURL_VER
 unset LD_LIBRARY_PATH
 unset PKG_CONFIG_PATH
 ./configure \
+  --host=${ARCH_TRIPLET} \
+  --build=$(gcc -dumpmachine) \
   --prefix=$SYSROOT/usr \
   --with-ssl \
   --without-libpsl \
@@ -112,9 +124,6 @@ unset PKG_CONFIG_PATH
   --enable-static
 make -j$(nproc)
 make install
-
-  #--host=x86_64-unknown-linux-gnu \
-  #--build=$(gcc -dumpmachine) \
 
 if [ $? -ne 0 ]; then
     echo "curl build failed, exiting."
@@ -136,8 +145,8 @@ cmake -B build \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_CXX_EXTENSIONS=OFF \
     -DCMAKE_SYSROOT="$UE_TOOLCHAIN_PATH" \
-    -DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/x86_64-unknown-linux-gnu-gcc" \
-    -DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/x86_64-unknown-linux-gnu-g++" \
+	-DCMAKE_C_COMPILER="$UE_TOOLCHAIN_PATH/bin/${ARCH_TRIPLET}-gcc" \
+	-DCMAKE_CXX_COMPILER="$UE_TOOLCHAIN_PATH/bin/${ARCH_TRIPLET}-g++" \
     -DCMAKE_FIND_ROOT_PATH="$UE_TOOLCHAIN_PATH" \
     -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
