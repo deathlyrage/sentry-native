@@ -5,6 +5,8 @@ TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLC
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="unreal_toolchain"
 
+rm -rf $TOOLCHAIN_DIR || true
+
 # Download the Unreal Engine Linux Toolchain if it's not already present
 if [ ! -d "$TOOLCHAIN_DIR" ]; then
 	echo "Downloading Unreal Engine Linux Toolchain..."
