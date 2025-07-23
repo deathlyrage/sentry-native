@@ -27,9 +27,12 @@ rm -rf "install"
 #export CXX="$UE_TOOLCHAIN_PATH/bin/clang++"
 
 # Install Zlib in Sysroot
-wget https://zlib.net/zlib-1.3.1.tar.gz
-tar xf zlib-1.3.1.tar.gz
-cd zlib-1.3.1
+ZLIB_VER="1.3.1"
+ZLIB_URL="https://zlib.net/zlib-$ZLIB_VER.tar.gz"
+wget "$ZLIB_URL"
+tar xf "zlib-$ZLIB_VER.tar.gz"
+rm "zlib-$ZLIB_VER.tar.gz"
+cd "zlib-$ZLIB_VER"
 ./configure --prefix="$UE_TOOLCHAIN_PATH/usr"
 make -j$(nproc)
 make install
@@ -39,6 +42,7 @@ cd ..
 OPENSSL_VER="3.5.1"
 wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
+rm openssl-$OPENSSL_VER.tar.gz
 cd openssl-$OPENSSL_VER
 ./Configure linux-x86_64 --prefix="$UE_TOOLCHAIN_PATH/usr" no-shared no-shared no-tests no-docs no-docs
 make -j$(nproc)
@@ -49,6 +53,7 @@ cd ..
 LIBPSL_VER="0.21.5"
 wget https://github.com/rockdaboot/libpsl/releases/download/$LIBPSL_VER/libpsl-$LIBPSL_VER.tar.gz
 tar xf libpsl-$LIBPSL_VER.tar.gz
+rm libpsl-$LIBPSL_VER.tar.gz
 cd libpsl-$LIBPSL_VER
 # Set PKG_CONFIG_PATH so that any dependencies installed to sysroot can be found
 export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
