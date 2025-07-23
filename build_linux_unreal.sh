@@ -73,7 +73,7 @@ cd libpsl-$LIBPSL_VER
 # Set PKG_CONFIG_PATH so that any dependencies installed to sysroot can be found
 export PKG_CONFIG_PATH="$UE_TOOLCHAIN_PATH/usr/lib/pkgconfig:$UE_TOOLCHAIN_PATH/usr/share/pkgconfig"
 # Configure for your sysroot
-./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static
+./configure --prefix="$UE_TOOLCHAIN_PATH/usr" --disable-shared --enable-static --disable-tools
 make -j$(nproc)
 make install
 
