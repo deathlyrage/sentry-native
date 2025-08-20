@@ -85,6 +85,8 @@ def assert_event_meta(
     transaction_data=None,
     sdk_override=None,
 ):
+    assert event["event_id"]
+
     extra = {
         "extra stuff": "some value",
         "…unicode key…": "őá…–🤮🚀¿ 한글 테스트",
@@ -103,9 +105,9 @@ def assert_event_meta(
     }
     expected_sdk = {
         "name": "sentry.native",
-        "version": "0.9.1",
+        "version": "0.10.0",
         "packages": [
-            {"name": "github:getsentry/sentry-native", "version": "0.9.1"},
+            {"name": "github:getsentry/sentry-native", "version": "0.10.0"},
         ],
     }
     if is_android:

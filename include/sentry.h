@@ -78,7 +78,7 @@ extern "C" {
 #        define SENTRY_SDK_NAME "sentry.native"
 #    endif
 #endif
-#define SENTRY_SDK_VERSION "0.9.1"
+#define SENTRY_SDK_VERSION "0.10.0"
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
 /* marks a function as part of the sentry API */
@@ -187,6 +187,8 @@ typedef enum {
     SENTRY_VALUE_TYPE_NULL,
     SENTRY_VALUE_TYPE_BOOL,
     SENTRY_VALUE_TYPE_INT32,
+    SENTRY_VALUE_TYPE_INT64,
+    SENTRY_VALUE_TYPE_UINT64,
     SENTRY_VALUE_TYPE_DOUBLE,
     SENTRY_VALUE_TYPE_STRING,
     SENTRY_VALUE_TYPE_LIST,
@@ -249,6 +251,16 @@ SENTRY_API sentry_value_t sentry_value_new_null(void);
  * Creates a new 32-bit signed integer value.
  */
 SENTRY_API sentry_value_t sentry_value_new_int32(int32_t value);
+
+/**
+ * Creates a new 64-bit signed integer value.
+ */
+SENTRY_API sentry_value_t sentry_value_new_int64(int64_t value);
+
+/**
+ * Creates a new 64-bit unsigned integer value.
+ */
+SENTRY_API sentry_value_t sentry_value_new_uint64(uint64_t value);
 
 /**
  * Creates a new double value.
@@ -387,6 +399,16 @@ SENTRY_API size_t sentry_value_get_length(sentry_value_t value);
  * Converts a value into a 32bit signed integer.
  */
 SENTRY_API int32_t sentry_value_as_int32(sentry_value_t value);
+
+/**
+ * Converts a value into a 64-bit signed integer.
+ */
+SENTRY_API int64_t sentry_value_as_int64(sentry_value_t value);
+
+/**
+ * Converts a value into a 64-bit unsigned integer.
+ */
+SENTRY_API uint64_t sentry_value_as_uint64(sentry_value_t value);
 
 /**
  * Converts a value into a double value.
@@ -663,6 +685,16 @@ typedef struct sentry_envelope_s sentry_envelope_t;
 SENTRY_API void sentry_envelope_free(sentry_envelope_t *envelope);
 
 /**
+ * Given an Envelope, returns the header if present.
+ *
+ * This returns a borrowed value to the headers in the Envelope.
+ */
+SENTRY_API sentry_value_t sentry_envelope_get_header(
+    const sentry_envelope_t *envelope, const char *key);
+SENTRY_API sentry_value_t sentry_envelope_get_header_n(
+    const sentry_envelope_t *envelope, const char *key, size_t key_len);
+
+/**
  * Given an Envelope, returns the embedded Event if there is one.
  *
  * This returns a borrowed value to the Event in the Envelope.
@@ -697,6 +729,44 @@ SENTRY_API int sentry_envelope_write_to_file(
     const sentry_envelope_t *envelope, const char *path);
 SENTRY_API int sentry_envelope_write_to_file_n(
     const sentry_envelope_t *envelope, const char *path, size_t path_len);
+
+/**
+ * De-serializes an envelope.
+ *
+ * The return value needs to be freed with sentry_envelope_free().
+ *
+ * Returns NULL on failure.
+ */
+SENTRY_API sentry_envelope_t *sentry_envelope_deserialize(
+    const char *buf, size_t buf_len);
+
+/**
+ * De-serializes an envelope from a file.
+ *
+ * `path` is assumed to be in platform-specific filesystem path encoding.
+ *
+ * API Users on windows are encouraged to use `sentry_envelope_read_from_filew`
+ * instead.
+ */
+SENTRY_API sentry_envelope_t *sentry_envelope_read_from_file(const char *path);
+SENTRY_API sentry_envelope_t *sentry_envelope_read_from_file_n(
+    const char *path, size_t path_len);
+
+#ifdef SENTRY_PLATFORM_WINDOWS
+/**
+ * Wide char versions of `sentry_envelope_read_from_file` and
+ * `sentry_envelope_read_from_file_n`.
+ */
+SENTRY_API sentry_envelope_t *sentry_envelope_read_from_filew(
+    const wchar_t *path);
+SENTRY_API sentry_envelope_t *sentry_envelope_read_from_filew_n(
+    const wchar_t *path, size_t path_len);
+#endif
+
+/**
+ * Submits an envelope, first checking for consent.
+ */
+SENTRY_API void sentry_capture_envelope(sentry_envelope_t *envelope);
 
 /**
  * The Sentry Client Options.
@@ -1721,6 +1791,9 @@ SENTRY_API void sentry_remove_fingerprint(void);
 /**
  * Set the trace. The primary use for this is to allow other SDKs to propagate
  * their trace context to connect events on all layers.
+ *
+ * Once a trace is managed by the downstream SDK using this function,
+ * transactions no longer act as automatic trace boundaries.
  */
 SENTRY_API void sentry_set_trace(
     const char *trace_id, const char *parent_span_id);
@@ -1731,6 +1804,14 @@ SENTRY_API void sentry_set_trace_n(const char *trace_id, size_t trace_id_len,
  * Generates a new random `trace_id` and `span_id` and sets these onto
  * the propagation context. Use this to set a trace boundary for
  * events/transactions.
+ *
+ * Once you regenerate a trace manually, transactions no longer act as automatic
+ * trace boundaries. This means all following transactions will be part of the
+ * same trace until you regenerate the trace again.
+ *
+ * We urge you not to use this function if you use the Native SDK in the context
+ * of a downstream SDK like Android, .NET, Unity or Unreal, because it will
+ * interfere with cross-SDK traces which are managed by these SDKs.
  */
 SENTRY_EXPERIMENTAL_API void sentry_regenerate_trace(void);
 
