@@ -1,5 +1,6 @@
 # Sentry Native - Linux ARM64 Cross-Compile Script for Windows
 # Uses Unreal Engine's cross-compile toolchain (must be already installed)
+# winget install Ninja-build.Ninja
 
 #Requires -Version 5.1
 
@@ -66,11 +67,38 @@ if (-not (Test-Path $ToolchainPath)) {
     exit 1
 }
 
-# Verify toolchain has required files
-$GccPath = Join-Path $ToolchainPath "bin\$ArchTriplet-gcc.exe"
-if (-not (Test-Path $GccPath)) {
-    Write-Host "ERROR: GCC not found at: $GccPath" -ForegroundColor Red
-    Write-Host "Please verify the toolchain path is correct." -ForegroundColor Red
+# Normalize path (convert to Unix-style for CMake)
+$ToolchainPath = $ToolchainPath.TrimEnd('\')
+
+# Check for both .exe and non-.exe versions of compilers
+$CompilerChecks = @(
+    "$ToolchainPath\bin\$ArchTriplet-gcc.exe",
+    "$ToolchainPath\bin\$ArchTriplet-gcc",
+    "$ToolchainPath\bin\clang.exe",
+    "$ToolchainPath\bin\clang"
+)
+
+$CompilerFound = $false
+$CompilerType = ""
+$CompilerPath = ""
+
+foreach ($check in $CompilerChecks) {
+    if (Test-Path $check) {
+        $CompilerFound = $true
+        $CompilerPath = $check
+        if ($check -like "*gcc*") {
+            $CompilerType = "gcc"
+        } else {
+            $CompilerType = "clang"
+        }
+        break
+    }
+}
+
+if (-not $CompilerFound) {
+    Write-Host "ERROR: No compiler found in toolchain!" -ForegroundColor Red
+    Write-Host "Checked paths:" -ForegroundColor Yellow
+    $CompilerChecks | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
     exit 1
 }
 
@@ -79,6 +107,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "Sentry Native - Linux ARM64 Build" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "Toolchain:   $ToolchainPath" -ForegroundColor White
+Write-Host "Compiler:    $CompilerType" -ForegroundColor White
 Write-Host "Build Type:  $BuildType" -ForegroundColor White
 Write-Host "Target:      Linux ARM64 ($Arch)" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor Cyan
@@ -132,37 +161,90 @@ catch {
 Write-Host ""
 
 # ============================================================================
+# Create CMake Toolchain File
+# ============================================================================
+
+Write-Host "Creating CMake toolchain file..." -ForegroundColor Yellow
+
+$ToolchainFile = "$PWD\cmake_toolchain_temp.cmake"
+
+# Convert Windows path to CMake-friendly format
+$CMakeToolchainPath = $ToolchainPath -replace '\\', '/'
+
+# Determine compiler paths based on what we found
+if ($CompilerType -eq "gcc") {
+    $CCPath = "$CMakeToolchainPath/bin/$ArchTriplet-gcc"
+    $CXXPath = "$CMakeToolchainPath/bin/$ArchTriplet-g++"
+    $ARPath = "$CMakeToolchainPath/bin/$ArchTriplet-ar"
+    $RANLIBPath = "$CMakeToolchainPath/bin/$ArchTriplet-ranlib"
+    $STRIPPath = "$CMakeToolchainPath/bin/$ArchTriplet-strip"
+} else {
+    $CCPath = "$CMakeToolchainPath/bin/clang"
+    $CXXPath = "$CMakeToolchainPath/bin/clang++"
+    $ARPath = "$CMakeToolchainPath/bin/llvm-ar"
+    $RANLIBPath = "$CMakeToolchainPath/bin/llvm-ranlib"
+    $STRIPPath = "$CMakeToolchainPath/bin/llvm-strip"
+}
+
+$ToolchainContent = @"
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR $Arch)
+
+set(CMAKE_SYSROOT "$CMakeToolchainPath")
+
+set(CMAKE_C_COMPILER "$CCPath")
+set(CMAKE_CXX_COMPILER "$CXXPath")
+set(CMAKE_AR "$ARPath")
+set(CMAKE_RANLIB "$RANLIBPath")
+set(CMAKE_STRIP "$STRIPPath")
+
+set(CMAKE_C_COMPILER_TARGET $ArchTriplet)
+set(CMAKE_CXX_COMPILER_TARGET $ArchTriplet)
+
+set(CMAKE_FIND_ROOT_PATH "$CMakeToolchainPath")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+# Additional flags
+set(CMAKE_C_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
+set(CMAKE_CXX_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
+
+# Disable compiler checks that might fail during cross-compilation
+set(CMAKE_C_COMPILER_WORKS 1)
+set(CMAKE_CXX_COMPILER_WORKS 1)
+"@
+
+Set-Content -Path $ToolchainFile -Value $ToolchainContent -Encoding UTF8
+Write-Host "Toolchain file created at: $ToolchainFile" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================================
 # Configure CMake
 # ============================================================================
 
 Write-Host "Configuring CMake..." -ForegroundColor Yellow
 
+$InstallPath = "$PWD\install" -replace '\\', '/'
+
 $CMakeArgs = @(
     "-B", "build"
     "-G", $Generator
+    "-DCMAKE_TOOLCHAIN_FILE=$ToolchainFile"
     "-DCMAKE_BUILD_TYPE=$BuildType"
-    "-DCMAKE_INSTALL_PREFIX=$PWD\install"
+    "-DCMAKE_INSTALL_PREFIX=$InstallPath"
     "-DSENTRY_BACKEND=crashpad"
     "-DSENTRY_TRANSPORT=none"
     "-DBUILD_SHARED_LIBS=ON"
     "-DSENTRY_BUILD_TESTS=OFF"
     "-DSENTRY_BUILD_EXAMPLES=OFF"
-    "-DCMAKE_C_COMPILER=$ToolchainPath\bin\$ArchTriplet-gcc.exe"
-    "-DCMAKE_CXX_COMPILER=$ToolchainPath\bin\$ArchTriplet-g++.exe"
-    "-DCMAKE_AR=$ToolchainPath\bin\$ArchTriplet-ar.exe"
-    "-DCMAKE_RANLIB=$ToolchainPath\bin\$ArchTriplet-ranlib.exe"
-    "-DCMAKE_STRIP=$ToolchainPath\bin\$ArchTriplet-strip.exe"
-    "-DCMAKE_SYSTEM_NAME=Linux"
-    "-DCMAKE_SYSTEM_PROCESSOR=$Arch"
-    "-DCMAKE_SYSROOT=$ToolchainPath"
-    "-DCMAKE_FIND_ROOT_PATH=$ToolchainPath"
-    "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER"
-    "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY"
-    "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY"
-    "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY"
     "-DCMAKE_CXX_STANDARD=17"
     "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
     "-DCMAKE_CXX_EXTENSIONS=OFF"
+    "-DCMAKE_VERBOSE_MAKEFILE=ON"
 )
 
 try {
@@ -176,6 +258,9 @@ try {
 catch {
     Write-Host "ERROR: CMake configuration failed!" -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Toolchain file contents:" -ForegroundColor Yellow
+    Get-Content $ToolchainFile | ForEach-Object { Write-Host $_ -ForegroundColor Gray }
     exit 1
 }
 
@@ -269,6 +354,14 @@ else {
 }
 
 Write-Host ""
+
+# ============================================================================
+# Cleanup temporary files
+# ============================================================================
+
+if (Test-Path $ToolchainFile) {
+    Remove-Item $ToolchainFile -Force
+}
 
 # ============================================================================
 # Summary
