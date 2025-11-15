@@ -1,6 +1,5 @@
 # Sentry Native - Linux ARM64 Cross-Compile Script for Windows
 # Uses Unreal Engine's cross-compile toolchain (must be already installed)
-# winget install Ninja-build.Ninja
 
 #Requires -Version 5.1
 
@@ -72,25 +71,22 @@ $ToolchainPath = $ToolchainPath.TrimEnd('\')
 
 # Check for both .exe and non-.exe versions of compilers
 $CompilerChecks = @(
-    "$ToolchainPath\bin\$ArchTriplet-gcc.exe",
-    "$ToolchainPath\bin\$ArchTriplet-gcc",
-    "$ToolchainPath\bin\clang.exe",
-    "$ToolchainPath\bin\clang"
+    @{Path="$ToolchainPath\bin\$ArchTriplet-gcc.exe"; Type="gcc"; Ext=".exe"},
+    @{Path="$ToolchainPath\bin\$ArchTriplet-gcc"; Type="gcc"; Ext=""},
+    @{Path="$ToolchainPath\bin\clang.exe"; Type="clang"; Ext=".exe"},
+    @{Path="$ToolchainPath\bin\clang"; Type="clang"; Ext=""}
 )
 
 $CompilerFound = $false
 $CompilerType = ""
-$CompilerPath = ""
+$CompilerExt = ""
 
 foreach ($check in $CompilerChecks) {
-    if (Test-Path $check) {
+    if (Test-Path $check.Path) {
         $CompilerFound = $true
-        $CompilerPath = $check
-        if ($check -like "*gcc*") {
-            $CompilerType = "gcc"
-        } else {
-            $CompilerType = "clang"
-        }
+        $CompilerType = $check.Type
+        $CompilerExt = $check.Ext
+        Write-Host "Found compiler: $($check.Path)" -ForegroundColor Green
         break
     }
 }
@@ -98,7 +94,14 @@ foreach ($check in $CompilerChecks) {
 if (-not $CompilerFound) {
     Write-Host "ERROR: No compiler found in toolchain!" -ForegroundColor Red
     Write-Host "Checked paths:" -ForegroundColor Yellow
-    $CompilerChecks | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    $CompilerChecks | ForEach-Object { Write-Host "  $($_.Path)" -ForegroundColor Yellow }
+    Write-Host ""
+    Write-Host "Listing actual files in bin directory:" -ForegroundColor Yellow
+    if (Test-Path "$ToolchainPath\bin") {
+        Get-ChildItem "$ToolchainPath\bin" | Select-Object -First 20 | ForEach-Object { 
+            Write-Host "  $($_.Name)" -ForegroundColor Gray 
+        }
+    }
     exit 1
 }
 
@@ -147,15 +150,44 @@ catch {
     exit 1
 }
 
-# Check Ninja
+# Check for build system
+$Generator = $null
+
+# Try Ninja first (recommended)
 try {
     $ninjaVersion = & ninja --version 2>&1
     Write-Host "  [OK] Ninja: version $ninjaVersion" -ForegroundColor Green
     $Generator = "Ninja"
 }
 catch {
-    Write-Host "  [WARNING] Ninja not found, falling back to NMake" -ForegroundColor Yellow
-    $Generator = "NMake Makefiles"
+    Write-Host "  [INFO] Ninja not found" -ForegroundColor Gray
+}
+
+# Try NMake (requires Visual Studio)
+if (-not $Generator) {
+    try {
+        $nmakeVersion = & nmake /? 2>&1 | Select-Object -First 1
+        if ($LASTEXITCODE -eq 0 -or $nmakeVersion -match "Microsoft") {
+            Write-Host "  [OK] NMake found" -ForegroundColor Green
+            $Generator = "NMake Makefiles"
+        }
+    }
+    catch {
+        Write-Host "  [INFO] NMake not found" -ForegroundColor Gray
+    }
+}
+
+# Fall back to Unix Makefiles (using toolchain's make)
+if (-not $Generator) {
+    Write-Host "  [WARNING] Neither Ninja nor NMake found" -ForegroundColor Yellow
+    Write-Host "  [INFO] Using Unix Makefiles with toolchain's make" -ForegroundColor Cyan
+    Write-Host "" 
+    Write-Host "  TIP: For faster builds, install Ninja:" -ForegroundColor Yellow
+    Write-Host "       winget install Ninja-build.Ninja" -ForegroundColor Gray
+    Write-Host "       or download from: https://github.com/ninja-build/ninja/releases" -ForegroundColor Gray
+    Write-Host ""
+    $Generator = "Unix Makefiles"
+    $UseToolchainMake = $true
 }
 
 Write-Host ""
@@ -173,49 +205,81 @@ $CMakeToolchainPath = $ToolchainPath -replace '\\', '/'
 
 # Determine compiler paths based on what we found
 if ($CompilerType -eq "gcc") {
-    $CCPath = "$CMakeToolchainPath/bin/$ArchTriplet-gcc"
-    $CXXPath = "$CMakeToolchainPath/bin/$ArchTriplet-g++"
-    $ARPath = "$CMakeToolchainPath/bin/$ArchTriplet-ar"
-    $RANLIBPath = "$CMakeToolchainPath/bin/$ArchTriplet-ranlib"
-    $STRIPPath = "$CMakeToolchainPath/bin/$ArchTriplet-strip"
+    $CCPath = "$CMakeToolchainPath/bin/$ArchTriplet-gcc$CompilerExt"
+    $CXXPath = "$CMakeToolchainPath/bin/$ArchTriplet-g++$CompilerExt"
+    $ARPath = "$CMakeToolchainPath/bin/$ArchTriplet-ar$CompilerExt"
+    $RANLIBPath = "$CMakeToolchainPath/bin/$ArchTriplet-ranlib$CompilerExt"
+    $STRIPPath = "$CMakeToolchainPath/bin/$ArchTriplet-strip$CompilerExt"
 } else {
-    $CCPath = "$CMakeToolchainPath/bin/clang"
-    $CXXPath = "$CMakeToolchainPath/bin/clang++"
-    $ARPath = "$CMakeToolchainPath/bin/llvm-ar"
-    $RANLIBPath = "$CMakeToolchainPath/bin/llvm-ranlib"
-    $STRIPPath = "$CMakeToolchainPath/bin/llvm-strip"
+    $CCPath = "$CMakeToolchainPath/bin/clang$CompilerExt"
+    $CXXPath = "$CMakeToolchainPath/bin/clang++$CompilerExt"
+    $ARPath = "$CMakeToolchainPath/bin/llvm-ar$CompilerExt"
+    $RANLIBPath = "$CMakeToolchainPath/bin/llvm-ranlib$CompilerExt"
+    $STRIPPath = "$CMakeToolchainPath/bin/llvm-strip$CompilerExt"
 }
 
 $ToolchainContent = @"
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR $Arch)
 
+# Must be set before compiler
 set(CMAKE_SYSROOT "$CMakeToolchainPath")
 
+# Set compilers
 set(CMAKE_C_COMPILER "$CCPath")
 set(CMAKE_CXX_COMPILER "$CXXPath")
-set(CMAKE_AR "$ARPath")
-set(CMAKE_RANLIB "$RANLIBPath")
-set(CMAKE_STRIP "$STRIPPath")
 
+# Skip the compiler checks - they will fail for cross-compilation
+set(CMAKE_C_COMPILER_WORKS TRUE)
+set(CMAKE_CXX_COMPILER_WORKS TRUE)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# Set other tools
+set(CMAKE_AR "$ARPath" CACHE FILEPATH "Archiver")
+set(CMAKE_RANLIB "$RANLIBPath" CACHE FILEPATH "Ranlib")
+set(CMAKE_STRIP "$STRIPPath" CACHE FILEPATH "Strip")
+
+# Set compiler target
 set(CMAKE_C_COMPILER_TARGET $ArchTriplet)
 set(CMAKE_CXX_COMPILER_TARGET $ArchTriplet)
 
-set(CMAKE_FIND_ROOT_PATH "$CMakeToolchainPath")
+# Search paths - include all standard library locations
+set(CMAKE_FIND_ROOT_PATH "$CMakeToolchainPath" "$CMakeToolchainPath/usr" "$CMakeToolchainPath/$ArchTriplet")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
-# Additional flags
-set(CMAKE_C_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
-set(CMAKE_CXX_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "--sysroot=$CMakeToolchainPath")
+# Additional library and include search paths
+set(CMAKE_LIBRARY_PATH 
+    "$CMakeToolchainPath/lib"
+    "$CMakeToolchainPath/lib64"
+    "$CMakeToolchainPath/usr/lib"
+    "$CMakeToolchainPath/usr/lib64"
+    "$CMakeToolchainPath/$ArchTriplet/lib"
+    "$CMakeToolchainPath/$ArchTriplet/lib64"
+    CACHE STRING "")
 
-# Disable compiler checks that might fail during cross-compilation
-set(CMAKE_C_COMPILER_WORKS 1)
-set(CMAKE_CXX_COMPILER_WORKS 1)
+set(CMAKE_INCLUDE_PATH
+    "$CMakeToolchainPath/include"
+    "$CMakeToolchainPath/usr/include"
+    "$CMakeToolchainPath/$ArchTriplet/include"
+    CACHE STRING "")
+
+# Threads configuration for cross-compilation
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+set(CMAKE_THREAD_LIBS_INIT "-lpthread")
+set(CMAKE_HAVE_THREADS_LIBRARY 1)
+set(CMAKE_USE_WIN32_THREADS_INIT 0)
+set(CMAKE_USE_PTHREADS_INIT 1)
+set(Threads_FOUND TRUE)
+
+# Compiler and linker flags
+set(CMAKE_C_FLAGS "--sysroot=$CMakeToolchainPath" CACHE STRING "")
+set(CMAKE_CXX_FLAGS "--sysroot=$CMakeToolchainPath" CACHE STRING "")
+set(CMAKE_EXE_LINKER_FLAGS "--sysroot=$CMakeToolchainPath -pthread" CACHE STRING "")
+set(CMAKE_SHARED_LINKER_FLAGS "--sysroot=$CMakeToolchainPath -pthread" CACHE STRING "")
+set(CMAKE_MODULE_LINKER_FLAGS "--sysroot=$CMakeToolchainPath -pthread" CACHE STRING "")
 "@
 
 Set-Content -Path $ToolchainFile -Value $ToolchainContent -Encoding UTF8
@@ -245,7 +309,18 @@ $CMakeArgs = @(
     "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
     "-DCMAKE_CXX_EXTENSIONS=OFF"
     "-DCMAKE_VERBOSE_MAKEFILE=ON"
+    "-DCRASHPAD_ZLIB_SYSTEM=OFF"
 )
+
+# If using Unix Makefiles, we need to set the make program
+if ($Generator -eq "Unix Makefiles" -and $UseToolchainMake) {
+    $MakePath = "$ToolchainPath\bin"
+    $env:PATH = "$MakePath;$env:PATH"
+    Write-Host "Added toolchain bin to PATH: $MakePath" -ForegroundColor Cyan
+    
+    # Explicitly set CMAKE_MAKE_PROGRAM
+    $CMakeArgs += "-DCMAKE_MAKE_PROGRAM=$CMakeToolchainPath/bin/make"
+}
 
 try {
     & cmake @CMakeArgs
