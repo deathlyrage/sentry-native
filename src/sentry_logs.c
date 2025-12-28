@@ -671,7 +671,10 @@ static sentry_value_t
 construct_log(sentry_level_t level, const char *message, va_list args)
 {
     sentry_value_t log = sentry_value_new_object();
-    sentry_value_t attributes = sentry_value_new_object();
+    sentry_value_t attributes = sentry_value_new_null();
+    SENTRY_WITH_SCOPE (scope) {
+        attributes = sentry__value_clone(scope->attributes);
+    }
 
     SENTRY_WITH_OPTIONS (options) {
         // Extract custom attributes if the option is enabled
@@ -930,6 +933,15 @@ sentry__logs_flush_crash_safe(void)
     flush_logs_queue(true);
 
     SENTRY_DEBUG("crash-safe logs flush complete");
+}
+
+void
+sentry__logs_force_flush(void)
+{
+    while (sentry__atomic_fetch(&g_logs_state.flushing)) {
+        sentry__cpu_relax();
+    }
+    flush_logs_queue(false);
 }
 
 #ifdef SENTRY_UNITTEST

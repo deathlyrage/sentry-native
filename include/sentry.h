@@ -100,7 +100,7 @@ extern "C" {
 #    endif
 #endif
 #ifndef SENTRY_SDK_VERSION
-#    define SENTRY_SDK_VERSION "0.12.1"
+#    define SENTRY_SDK_VERSION "0.12.2"
 #endif
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
@@ -326,11 +326,12 @@ SENTRY_API sentry_value_t sentry_value_new_user_n(const char *id, size_t id_len,
 
 /**
  * Creates a new attribute object.
- *  value` is required, `unit` is optional.
+ *  value is required, unit is optional.
  *
- *'value' must be a bool, int, double or string (not null, list, object)
+ * value must be a bool, int, double or string `sentry_value_t`
+ * OR a list of bool, int, double or string (with all items being the same type)
  *
- * Moves ownership of `value` into the object. The caller does not
+ * Moves ownership of value into the object. The caller does not
  * have to call `sentry_value_decref` on it.
  */
 SENTRY_API sentry_value_t sentry_value_new_attribute(
@@ -1726,6 +1727,16 @@ SENTRY_API void sentry_user_consent_reset(void);
 SENTRY_API sentry_user_consent_t sentry_user_consent_get(void);
 
 /**
+ * Checks whether user consent is required.
+ *
+ * This returns the value that was configured via
+ * `sentry_options_set_require_user_consent` during initialization.
+ *
+ * Returns 1 if user consent is required, 0 otherwise.
+ */
+SENTRY_API int sentry_user_consent_is_required(void);
+
+/**
  * A sentry Scope.
  *
  * See https://develop.sentry.dev/sdk/telemetry/scopes/
@@ -1847,6 +1858,17 @@ SENTRY_API void sentry_scope_set_extra_n(sentry_scope_t *scope, const char *key,
  */
 SENTRY_API void sentry_remove_extra(const char *key);
 SENTRY_API void sentry_remove_extra_n(const char *key, size_t key_len);
+
+/**
+ * Sets attributes created with `sentry_value_new_attribute` to be applied to
+ * all:
+ * - logs
+ */
+SENTRY_API void sentry_set_attribute(const char *key, sentry_value_t attribute);
+SENTRY_API void sentry_set_attribute_n(
+    const char *key, size_t key_len, sentry_value_t attribute);
+SENTRY_API void sentry_remove_attribute(const char *key);
+SENTRY_API void sentry_remove_attribute_n(const char *key, size_t key_len);
 
 /**
  * Sets a context object.
