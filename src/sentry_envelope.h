@@ -63,6 +63,12 @@ sentry_envelope_item_t *sentry__envelope_add_logs(
     sentry_envelope_t *envelope, sentry_value_t logs);
 
 /**
+ * Add a list of metrics to this envelope.
+ */
+sentry_envelope_item_t *sentry__envelope_add_metrics(
+    sentry_envelope_t *envelope, sentry_value_t metrics);
+
+/**
  * Add a user feedback to this envelope.
  */
 sentry_envelope_item_t *sentry__envelope_add_user_feedback(
@@ -99,6 +105,12 @@ sentry_envelope_item_t *sentry__envelope_add_from_path(
 sentry_envelope_item_t *sentry__envelope_add_from_buffer(
     sentry_envelope_t *envelope, const char *buf, size_t buf_len,
     const char *type);
+
+/**
+ * This sets an explicit header for the given envelope.
+ */
+void sentry__envelope_set_header(
+    sentry_envelope_t *envelope, const char *key, sentry_value_t value);
 
 /**
  * This sets an explicit header for the given envelope item.
