@@ -61,7 +61,7 @@ export CXXFLAGS="--sysroot=${SYSROOT} -I${SYSROOT}/include -I${SYSROOT}/include/
 export LDFLAGS="--sysroot=${SYSROOT} -L${SYSROOT}/lib -L${SYSROOT}/lib64 -L${SYSROOT}/usr/lib -L${SYSROOT}/usr/lib64"
 
 # Install Zlib in Sysroot
-ZLIB_VER="1.3.1"
+ZLIB_VER="1.3.2"
 ZLIB_URL="https://zlib.net/zlib-$ZLIB_VER.tar.gz"
 wget "$ZLIB_URL"
 tar xf "zlib-$ZLIB_VER.tar.gz"
