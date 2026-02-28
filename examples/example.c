@@ -202,6 +202,29 @@ discarding_before_send_metric_callback(sentry_value_t metric, void *user_data)
     return sentry_value_new_null();
 }
 
+static sentry_value_t
+before_breadcrumb_callback(sentry_value_t breadcrumb, void *user_data)
+{
+    (void)user_data;
+
+    // make our mark on the breadcrumbs
+    sentry_value_set_by_key(
+        breadcrumb, "category", sentry_value_new_string("before_breadcrumb"));
+
+    return breadcrumb;
+}
+
+static sentry_value_t
+discarding_before_breadcrumb_callback(
+    sentry_value_t breadcrumb, void *user_data)
+{
+    (void)user_data;
+
+    // discard breadcrumb
+    sentry_value_decref(breadcrumb);
+    return sentry_value_new_null();
+}
+
 // Test logger that outputs in a format the integration tests can parse
 static void
 test_logger_callback(
@@ -238,6 +261,27 @@ has_arg(int argc, char **argv, const char *arg)
         }
     }
     return false;
+}
+
+/**
+ * Builds a proxy URL from a scheme, optional credentials, host, and a port
+ * read from an environment variable (with a fallback default).
+ */
+static void
+make_proxy_url(char *buf, size_t buf_size, const char *scheme,
+    const char *credentials, const char *host, const char *port_env_var,
+    const char *default_port)
+{
+    const char *port = getenv(port_env_var);
+    if (!port)
+        port = default_port;
+
+    if (credentials) {
+        snprintf(
+            buf, buf_size, "%s://%s@%s:%s", scheme, credentials, host, port);
+    } else {
+        snprintf(buf, buf_size, "%s://%s:%s", scheme, host, port);
+    }
 }
 
 #if defined(SENTRY_PLATFORM_WINDOWS) && !defined(__MINGW32__)                  \
@@ -515,21 +559,31 @@ main(int argc, char **argv)
     }
 
     if (has_arg(argc, argv, "http-proxy")) {
-        sentry_options_set_proxy(options, "http://127.0.0.1:8080");
+        char proxy_url[128];
+        make_proxy_url(proxy_url, sizeof(proxy_url), "http", NULL, "127.0.0.1",
+            "SENTRY_TEST_PROXY_PORT", "8080");
+        sentry_options_set_proxy(options, proxy_url);
     }
     if (has_arg(argc, argv, "http-proxy-auth")) {
-        sentry_options_set_proxy(
-            options, "http://user:password@127.0.0.1:8080");
+        char proxy_url[128];
+        make_proxy_url(proxy_url, sizeof(proxy_url), "http", "user:password",
+            "127.0.0.1", "SENTRY_TEST_PROXY_PORT", "8080");
+        sentry_options_set_proxy(options, proxy_url);
     }
     if (has_arg(argc, argv, "http-proxy-ipv6")) {
-        sentry_options_set_proxy(options, "http://[::1]:8080");
+        char proxy_url[128];
+        make_proxy_url(proxy_url, sizeof(proxy_url), "http", NULL, "[::1]",
+            "SENTRY_TEST_PROXY_PORT", "8080");
+        sentry_options_set_proxy(options, proxy_url);
     }
     if (has_arg(argc, argv, "proxy-empty")) {
         sentry_options_set_proxy(options, "");
     }
-
     if (has_arg(argc, argv, "socks5-proxy")) {
-        sentry_options_set_proxy(options, "socks5://127.0.0.1:1080");
+        char proxy_url[128];
+        make_proxy_url(proxy_url, sizeof(proxy_url), "socks5", NULL,
+            "127.0.0.1", "SENTRY_TEST_PROXY_PORT", "1080");
+        sentry_options_set_proxy(options, proxy_url);
     }
 
     if (has_arg(argc, argv, "crashpad-wait-for-upload")) {
@@ -592,6 +646,16 @@ main(int argc, char **argv)
     if (has_arg(argc, argv, "discarding-before-send-metric")) {
         sentry_options_set_before_send_metric(
             options, discarding_before_send_metric_callback, NULL);
+    }
+
+    if (has_arg(argc, argv, "before-breadcrumb")) {
+        sentry_options_set_before_breadcrumb(
+            options, before_breadcrumb_callback, NULL);
+    }
+
+    if (has_arg(argc, argv, "discarding-before-breadcrumb")) {
+        sentry_options_set_before_breadcrumb(
+            options, discarding_before_breadcrumb_callback, NULL);
     }
 
     if (0 != sentry_init(options)) {
@@ -843,6 +907,10 @@ main(int argc, char **argv)
         assert(0);
     }
     if (has_arg(argc, argv, "abort")) {
+#ifdef _WIN32
+        // Suppress the Windows abort dialog that would block CI
+        _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
         abort();
     }
 #ifdef SENTRY_PLATFORM_UNIX

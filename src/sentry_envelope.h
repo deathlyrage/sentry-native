@@ -9,6 +9,7 @@
 #include "sentry_ratelimiter.h"
 #include "sentry_session.h"
 #include "sentry_string.h"
+#include "sentry_utils.h"
 
 // https://develop.sentry.dev/sdk/data-model/envelopes/#size-limits
 #define SENTRY_MAX_ENVELOPE_SESSIONS 100
@@ -21,14 +22,19 @@ typedef struct sentry_envelope_item_s sentry_envelope_item_t;
 sentry_envelope_t *sentry__envelope_new(void);
 
 /**
+ * Create a new empty envelope with the given DSN header.
+ */
+sentry_envelope_t *sentry__envelope_new_with_dsn(const sentry_dsn_t *dsn);
+
+/**
  * This loads a previously serialized envelope from disk.
  */
 sentry_envelope_t *sentry__envelope_from_path(const sentry_path_t *path);
 
 /**
  * This returns the UUID of the event associated with this envelope.
- * If there is no event inside this envelope, or the envelope was previously
- * loaded from disk, the empty nil UUID will be returned.
+ * If there is no event inside this envelope, the empty nil UUID will be
+ * returned.
  */
 sentry_uuid_t sentry__envelope_get_event_id(const sentry_envelope_t *envelope);
 

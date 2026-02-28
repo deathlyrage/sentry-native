@@ -207,6 +207,18 @@ typedef CONDITION_VARIABLE sentry_cond_t;
 #    define sentry__cond_wait(CondVar, Lock)                                   \
         sentry__cond_wait_timeout(CondVar, Lock, INFINITE)
 
+static inline sentry_threadid_t
+sentry__current_thread(void)
+{
+    return GetCurrentThread();
+}
+
+static inline int
+sentry__threadid_equal(sentry_threadid_t a, sentry_threadid_t b)
+{
+    return GetThreadId(a) == GetThreadId(b);
+}
+
 #else
 #    include <errno.h>
 #    include <pthread.h>
@@ -225,7 +237,13 @@ typedef CONDITION_VARIABLE sentry_cond_t;
    us crash under concurrent modifications.  The mutexes we're likely going
    to hit are the options and scope lock. */
 bool sentry__block_for_signal_handler(void);
-void sentry__enter_signal_handler(void);
+/**
+ * Enter signal handler context. Returns the recursion depth:
+ *   1 = first entry, normal processing
+ *   2 = re-entry (crash during handling), skip hooks but try to capture
+ *   3+ = multiple re-entries, bail out to previous handler
+ */
+int sentry__enter_signal_handler(void);
 void sentry__leave_signal_handler(void);
 
 typedef pthread_t sentry_threadid_t;
@@ -471,12 +489,23 @@ const char *sentry__bgworker_get_thread_name(sentry_bgworker_t *bgw);
 /**
  * This will submit a new task to the background thread.
  *
+ * The `_delayed` variant delays execution by the specified delay in
+ * milliseconds, and the `_at` variant executes after the specified monotonic
+ * timestamp. The latter is mostly useful for testing to ensure deterministic
+ * ordering of tasks regardless of OS preemption between submissions.
+ *
  * Takes ownership of `data`, freeing it using the provided `cleanup_func`.
  * Returns 0 on success.
  */
 int sentry__bgworker_submit(sentry_bgworker_t *bgw,
     sentry_task_exec_func_t exec_func, void (*cleanup_func)(void *task_data),
     void *task_data);
+int sentry__bgworker_submit_delayed(sentry_bgworker_t *bgw,
+    sentry_task_exec_func_t exec_func, void (*cleanup_func)(void *task_data),
+    void *task_data, uint64_t delay_ms);
+int sentry__bgworker_submit_at(sentry_bgworker_t *bgw,
+    sentry_task_exec_func_t exec_func, void (*cleanup_func)(void *task_data),
+    void *task_data, uint64_t execute_after);
 
 /**
  * This function will iterate through all the current tasks of the worker

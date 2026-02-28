@@ -8,6 +8,7 @@
 #include "sentry_string.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
+#include "sentry_utils.h"
 #include <stdlib.h>
 
 sentry_options_t *
@@ -69,10 +70,12 @@ sentry_options_new(void)
 #endif
     opts->backend = sentry__backend_new();
     opts->transport = sentry__transport_new_default();
-    opts->sample_rate = 1.0;
     opts->refcount = 1;
     opts->shutdown_timeout = SENTRY_DEFAULT_SHUTDOWN_TIMEOUT;
-    opts->traces_sample_rate = 0.0;
+    sentry_options_set_sample_rate(
+        opts, sentry__getenv_double("SENTRY_SAMPLE_RATE", 1.0));
+    sentry_options_set_traces_sample_rate(
+        opts, sentry__getenv_double("SENTRY_TRACES_SAMPLE_RATE", 0.0));
     opts->max_spans = SENTRY_SPANS_MAX;
     opts->handler_strategy = SENTRY_HANDLER_STRATEGY_DEFAULT;
 
@@ -167,6 +170,14 @@ sentry_options_set_before_send_log(sentry_options_t *opts,
 {
     opts->before_send_log_func = func;
     opts->before_send_log_data = user_data;
+}
+
+void
+sentry_options_set_before_breadcrumb(sentry_options_t *opts,
+    sentry_before_breadcrumb_function_t func, void *user_data)
+{
+    opts->before_breadcrumb_func = func;
+    opts->before_breadcrumb_data = user_data;
 }
 
 void

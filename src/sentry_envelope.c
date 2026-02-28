@@ -182,6 +182,18 @@ sentry__envelope_set_header(
 sentry_envelope_t *
 sentry__envelope_new(void)
 {
+    sentry_dsn_t *dsn = NULL;
+    SENTRY_WITH_OPTIONS (options) {
+        dsn = sentry__dsn_incref(options->dsn);
+    }
+    sentry_envelope_t *rv = sentry__envelope_new_with_dsn(dsn);
+    sentry__dsn_decref(dsn);
+    return rv;
+}
+
+sentry_envelope_t *
+sentry__envelope_new_with_dsn(const sentry_dsn_t *dsn)
+{
     sentry_envelope_t *rv = SENTRY_MAKE(sentry_envelope_t);
     if (!rv) {
         return NULL;
@@ -193,11 +205,9 @@ sentry__envelope_new(void)
     rv->contents.items.item_count = 0;
     rv->contents.items.headers = sentry_value_new_object();
 
-    SENTRY_WITH_OPTIONS (options) {
-        if (options->dsn && options->dsn->is_valid) {
-            sentry__envelope_set_header(rv, "dsn",
-                sentry_value_new_string(sentry_options_get_dsn(options)));
-        }
+    if (dsn && dsn->is_valid) {
+        sentry__envelope_set_header(
+            rv, "dsn", sentry_value_new_string(dsn->raw));
     }
 
     return rv;
@@ -230,7 +240,15 @@ sentry_uuid_t
 sentry__envelope_get_event_id(const sentry_envelope_t *envelope)
 {
     if (envelope->is_raw) {
-        return sentry_uuid_nil();
+        const char *payload = envelope->contents.raw.payload;
+        size_t payload_len = envelope->contents.raw.payload_len;
+        const char *newline = memchr(payload, '\n', payload_len);
+        size_t header_len = newline ? (size_t)(newline - payload) : payload_len;
+        sentry_value_t header = sentry__value_from_json(payload, header_len);
+        sentry_uuid_t event_id = sentry_uuid_from_string(sentry_value_as_string(
+            sentry_value_get_by_key(header, "event_id")));
+        sentry_value_decref(header);
+        return event_id;
     }
     return sentry_uuid_from_string(sentry_value_as_string(
         sentry_value_get_by_key(envelope->contents.items.headers, "event_id")));

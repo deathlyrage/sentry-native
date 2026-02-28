@@ -64,6 +64,8 @@ sentry_target_sources_cwd(sentry
 	transports/sentry_disk_transport.c
 	transports/sentry_disk_transport.h
 	transports/sentry_function_transport.c
+	transports/sentry_http_transport.c
+	transports/sentry_http_transport.h
 	unwinder/sentry_unwinder.c
 )
 
@@ -119,11 +121,11 @@ endif()
 # transport
 if(SENTRY_TRANSPORT_CURL)
 	sentry_target_sources_cwd(sentry
-		transports/sentry_transport_curl.c
+		transports/sentry_http_transport_curl.c
 	)
 elseif(SENTRY_TRANSPORT_WINHTTP)
 	sentry_target_sources_cwd(sentry
-		transports/sentry_transport_winhttp.c
+		transports/sentry_http_transport_winhttp.c
 	)
 elseif(SENTRY_TRANSPORT_NONE)
 	sentry_target_sources_cwd(sentry
@@ -159,6 +161,9 @@ elseif(SENTRY_BACKEND_NONE)
 endif()
 
 # unwinder
+sentry_target_sources_cwd(sentry
+	unwinder/sentry_unwinder.h
+)
 if(SENTRY_WITH_LIBBACKTRACE)
 	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_LIBBACKTRACE)
 	sentry_target_sources_cwd(sentry
@@ -170,6 +175,13 @@ if(SENTRY_WITH_LIBUNWIND)
 	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_LIBUNWIND)
 	sentry_target_sources_cwd(sentry
 		unwinder/sentry_unwinder_libunwind.c
+	)
+endif()
+
+if(SENTRY_WITH_LIBUNWIND_MAC)
+	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_LIBUNWIND_MAC)
+	sentry_target_sources_cwd(sentry
+			unwinder/sentry_unwinder_libunwind_mac.c
 	)
 endif()
 
