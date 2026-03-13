@@ -100,7 +100,7 @@ extern "C" {
 #    endif
 #endif
 #ifndef SENTRY_SDK_VERSION
-#    define SENTRY_SDK_VERSION "0.13.1"
+#    define SENTRY_SDK_VERSION "0.13.2"
 #endif
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
@@ -996,6 +996,65 @@ typedef enum {
 } sentry_handler_strategy_t;
 
 /**
+ * The minidump capture mode for the native backend.
+ *
+ * This controls how much memory is captured in crash minidumps.
+ */
+typedef enum {
+    /**
+     * Capture only stack memory (~100KB-1MB).
+     * Fastest and smallest. Suitable for production environments with
+     * high crash volumes. Provides basic crash analysis.
+     */
+    SENTRY_MINIDUMP_MODE_STACK_ONLY = 0,
+
+    /**
+     * Capture stack + heap around crash site (~5-10MB).
+     * Balanced mode providing good crash analysis without excessive overhead.
+     * This is the default and recommended for most applications.
+     */
+    SENTRY_MINIDUMP_MODE_SMART = 1,
+
+    /**
+     * Capture full process memory (10s-100s MB).
+     * Most comprehensive debugging information but slowest to generate
+     * and upload. Best for development/staging environments or critical
+     * crash investigations.
+     */
+    SENTRY_MINIDUMP_MODE_FULL = 2,
+} sentry_minidump_mode_t;
+
+/**
+ * Crash reporting mode for the native backend.
+ * Controls what data is collected and sent on crash.
+ */
+typedef enum {
+    /**
+     * Minidump only (legacy behavior).
+     * Write and send minidump for server-side symbolication.
+     * The server will unwind the stack and symbolicate.
+     */
+    SENTRY_CRASH_REPORTING_MODE_MINIDUMP = 0,
+
+    /**
+     * Native stackwalking only.
+     * Walk stack client-side in crash daemon, send JSON event with
+     * stacktraces and debug_meta. No minidump generated.
+     * Faster upload, smaller payload, but less debugging information.
+     */
+    SENTRY_CRASH_REPORTING_MODE_NATIVE = 1,
+
+    /**
+     * Native stackwalking with minidump attachment (default).
+     * Same as NATIVE mode, but also attaches minidump for debugging.
+     * Native stacktrace is primary event, minidump is attachment only.
+     * Best of both worlds: fast client-side unwinding with full minidump
+     * available for deep debugging when needed.
+     */
+    SENTRY_CRASH_REPORTING_MODE_NATIVE_WITH_MINIDUMP = 2,
+} sentry_crash_reporting_mode_t;
+
+/**
  * Creates a new options struct.
  * Can be freed with `sentry_options_free`.
  */
@@ -1667,6 +1726,44 @@ SENTRY_API void sentry_options_set_system_crash_reporter_enabled(
     sentry_options_t *opts, int enabled);
 
 /**
+ * Sets the minidump capture mode for the native backend.
+ *
+ * This controls how much memory is captured in crash minidumps.
+ * See `sentry_minidump_mode_t` for available modes.
+ *
+ * Larger captures provide more debugging information but take longer to
+ * generate and upload. For production, `SENTRY_MINIDUMP_MODE_STACK_ONLY` or
+ * `SENTRY_MINIDUMP_MODE_SMART` are recommended.
+ *
+ * This setting only has an effect when using the `native` backend.
+ * Default is `SENTRY_MINIDUMP_MODE_SMART`.
+ */
+SENTRY_API void sentry_options_set_minidump_mode(
+    sentry_options_t *opts, sentry_minidump_mode_t mode);
+
+/**
+ * Sets the crash reporting mode for the native backend.
+ *
+ * This controls how crash data is collected and what is sent to Sentry:
+ * - MINIDUMP: Traditional minidump-only mode (server-side unwinding)
+ * - NATIVE: Client-side stack unwinding, JSON event with stacktraces
+ * - NATIVE_WITH_MINIDUMP: Both native stacktrace and minidump attachment
+ *
+ * See `sentry_crash_reporting_mode_t` for detailed mode descriptions.
+ *
+ * This setting only has an effect when using the `native` backend.
+ * Default is `SENTRY_CRASH_REPORTING_MODE_NATIVE_WITH_MINIDUMP`.
+ */
+SENTRY_API void sentry_options_set_crash_reporting_mode(
+    sentry_options_t *opts, sentry_crash_reporting_mode_t mode);
+
+/**
+ * Gets the crash reporting mode for the native backend.
+ */
+SENTRY_API sentry_crash_reporting_mode_t
+sentry_options_get_crash_reporting_mode(const sentry_options_t *opts);
+
+/**
  * Enables a wait for the crash report upload to be finished before shutting
  * down. This is disabled by default.
  *
@@ -1934,6 +2031,21 @@ SENTRY_API void sentry_scope_set_user(
  * Removes a user.
  */
 SENTRY_API void sentry_remove_user(void);
+
+/**
+ * Sets the release after the SDK has been initialized. To apply the new release
+ * to sessions, start a new session after calling this function.
+ */
+SENTRY_API void sentry_set_release(const char *release);
+SENTRY_API void sentry_set_release_n(const char *release, size_t release_len);
+
+/**
+ * Sets the environment after the SDK has been initialized. To apply the new
+ * environment to sessions, start a new session after calling this function.
+ */
+SENTRY_API void sentry_set_environment(const char *environment);
+SENTRY_API void sentry_set_environment_n(
+    const char *environment, size_t environment_len);
 
 /**
  * Sets a tag.
@@ -2219,6 +2331,20 @@ SENTRY_EXPERIMENTAL_API log_return_value_t sentry_log_error(
     const char *message, ...);
 SENTRY_EXPERIMENTAL_API log_return_value_t sentry_log_fatal(
     const char *message, ...);
+
+/**
+ * Sends a structured log with a plain string body and explicit attributes.
+ *
+ * Unlike the `sentry_log_*` functions, this function does NOT interpret the
+ * body as a printf format string. The body is stored as-is, making it safe
+ * for user-provided text that may contain `%` characters.
+ *
+ * Ownership of the `attributes` value is transferred to this function.
+ * Pass `sentry_value_new_null()` if no custom attributes are needed.
+ * To re-use the same attributes, call `sentry_value_incref` before passing.
+ */
+SENTRY_EXPERIMENTAL_API log_return_value_t sentry_log(
+    sentry_level_t level, const char *body, sentry_value_t attributes);
 
 /**
  * Type of the `before_send_log` callback.
