@@ -26,6 +26,10 @@
 #ifdef SENTRY_PLATFORM_UNIX
 #    include <poll.h>
 #endif
+#ifdef SENTRY_PLATFORM_ANDROID
+#    include <android/api-level.h>
+#    include <sys/syscall.h>
+#endif
 #include <string.h>
 
 /**
@@ -480,6 +484,17 @@ startup_inproc_backend(
         options ? sentry_options_get_handler_strategy(options) :
 #    endif
                 SENTRY_HANDLER_STRATEGY_DEFAULT;
+#    ifdef SENTRY_PLATFORM_ANDROID
+    // CHAIN_AT_START invokes the previous handler and expects to regain
+    // control. On Android API < 26, the old debuggerd daemon kills the
+    // crashing process via SIGKILL after the chained handler triggers
+    // it, so we fall back to DEFAULT which chains at the end instead.
+    if (g_backend_config.handler_strategy
+            == SENTRY_HANDLER_STRATEGY_CHAIN_AT_START
+        && android_get_device_api_level() < 26) {
+        g_backend_config.handler_strategy = SENTRY_HANDLER_STRATEGY_DEFAULT;
+    }
+#    endif
     if (backend) {
         backend->data = &g_backend_config;
     }
@@ -1351,7 +1366,7 @@ has_handler_thread_crashed(void)
     return false;
 }
 
-static void
+static bool
 dispatch_ucontext(const sentry_ucontext_t *uctx,
     const struct signal_slot *sig_slot, int handler_depth)
 {
@@ -1365,7 +1380,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
     // Disable stdio-based logging - not safe in signal handler context.
     sentry__logger_disable();
     process_ucontext_deferred(uctx, sig_slot, skip_hooks);
-    return;
+    return true;
 #else
     if (has_handler_thread_crashed()) {
         // Disable stdio-based logging since we're now in signal handler context
@@ -1377,7 +1392,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
         // Always skip hooks here since the first attempt (from handler thread)
         // already failed, likely due to a crashing hook.
         process_ucontext_deferred(uctx, sig_slot, true);
-        return;
+        return true;
     }
 
     // Try to become the crash handler. Only one thread can transition
@@ -1398,7 +1413,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
             sentry__cpu_relax();
         }
         // State is now DONE: just return and let the signal propagate
-        return;
+        return false;
     }
 
     // We are the first handler. Check if handler thread is available.
@@ -1406,7 +1421,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
         // Disable stdio-based logging - not safe in signal handler context.
         sentry__logger_disable();
         process_ucontext_deferred(uctx, sig_slot, skip_hooks);
-        return;
+        return true;
     }
 
     g_handler_state.uctx = *uctx;
@@ -1460,7 +1475,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
         int depth = sentry__enter_signal_handler();
         if (depth >= 3) {
             // Multiple recursive crashes - bail out
-            return;
+            return true;
         }
         // Disable stdio-based logging - not safe in signal handler context.
         sentry__logger_disable();
@@ -1469,7 +1484,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
         // always 1, which would incorrectly re-run hooks on a recursive
         // crash where the pipe also fails.
         process_ucontext_deferred(uctx, sig_slot, skip_hooks);
-        return;
+        return true;
     }
 #    elif defined(SENTRY_PLATFORM_WINDOWS)
     if (g_handler_semaphore) {
@@ -1486,7 +1501,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
         // Disable stdio-based logging - not safe in signal handler context.
         sentry__logger_disable();
         process_ucontext_deferred(uctx, sig_slot, skip_hooks);
-        return;
+        return true;
     }
 #    endif
 
@@ -1516,6 +1531,7 @@ dispatch_ucontext(const sentry_ucontext_t *uctx,
     (void)!sentry__enter_signal_handler();
 #    endif
 
+    return true;
 #endif
 }
 
@@ -1563,6 +1579,29 @@ process_ucontext(const sentry_ucontext_t *uctx)
         uintptr_t ip = get_instruction_pointer(uctx);
         uintptr_t sp = get_stack_pointer(uctx);
 
+#    ifdef SENTRY_PLATFORM_ANDROID
+        // Mask the signal so SA_NODEFER doesn't let re-raises from the chained
+        // handler kill the process before we regain control.
+        sigset_t mask, old_mask;
+        sigemptyset(&mask);
+        sigaddset(&mask, uctx->signum);
+        // Raw syscall because ART's libsigchain intercepts
+        // sigprocmask() and silently drops the request when called
+        // outside its own special handlers. Without the raw syscall
+        // the mask change would be ignored and SA_NODEFER would let
+        // the chained handler's raise() re-deliver the signal
+        // immediately, crashing the process before we can inspect
+        // the modified IP/SP.
+        //
+        // DANGER: this makes libsigchain's internal mask state
+        // diverge from the kernel's actual mask. If ART ever relies
+        // on that state for correctness (e.g. GC safepoints), this
+        // could cause subtle failures. We restore the mask right
+        // after the chained handler returns, limiting the window.
+        syscall(
+            SYS_rt_sigprocmask, SIG_BLOCK, &mask, &old_mask, sizeof(sigset_t));
+#    endif
+
         // invoke the previous handler (typically the CLR/Mono
         // signal-to-managed-exception handler)
         invoke_signal_handler(
@@ -1577,6 +1616,19 @@ process_ucontext(const sentry_ucontext_t *uctx)
             || sp != get_stack_pointer(uctx)) {
             return;
         }
+
+#    ifdef SENTRY_PLATFORM_ANDROID
+        // restore our handler after resend_signal() set SIG_DFL
+        sigaction(uctx->signum, &g_sigaction, NULL);
+
+        // consume pending signal
+        struct timespec timeout = { 0, 0 };
+        syscall(SYS_rt_sigtimedwait, &mask, NULL, &timeout, sizeof(sigset_t));
+
+        // unmask
+        syscall(
+            SYS_rt_sigprocmask, SIG_SETMASK, &old_mask, NULL, sizeof(sigset_t));
+#    endif
 
         // return from runtime handler; continue processing the crash on the
         // signal thread until the worker takes over
@@ -1618,10 +1670,17 @@ process_ucontext(const sentry_ucontext_t *uctx)
 
     // invoke the handler thread for signal unsafe actions
 #ifdef SENTRY_PLATFORM_UNIX
-    dispatch_ucontext(uctx, sig_slot, handler_depth);
+    bool is_handling_thread = dispatch_ucontext(uctx, sig_slot, handler_depth);
 #else
-    dispatch_ucontext(uctx, sig_slot, 1);
+    bool is_handling_thread = dispatch_ucontext(uctx, sig_slot, 1);
 #endif
+
+    // Non-handling threads (that lost the CAS race) should just return.
+    // Signal handlers are already reset by the handling thread, so
+    // re-executing the crashing instruction will hit the default handler.
+    if (!is_handling_thread) {
+        return;
+    }
 
 #ifdef SENTRY_PLATFORM_UNIX
 cleanup:

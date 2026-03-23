@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.3
+
+**Features**:
+
+- Add `addAttachment` and `clearAttachments` to the NDK `NativeScope` API for managing file and byte attachments via JNI. ([#1584](https://github.com/getsentry/sentry-native/pull/1584))
+
+**Fixes**:
+
+- inproc: only the handling thread cleans up after the crash. ([#1579](https://github.com/getsentry/sentry-native/pull/1579))
+- Propagate transport options (`ca_certs`, `proxy`, `user_agent`) and `handler_path` to the native backend crash daemon. Previously, the daemon did not receive SSL certificate or proxy settings from the parent process, causing SSL errors (curl code 60) when uploading crash reports. The daemon also ignored the user-configured handler path, requiring the `sentry-crash` binary to be placed next to the application executable. ([#1573](https://github.com/getsentry/sentry-native/pull/1573))
+- Add module header pages to MemoryList and fix exception code in the native backend. ([#1576](https://github.com/getsentry/sentry-native/pull/1576))
+- Fix `CHAIN_AT_START` handler strategy crashing on Android when the chained Mono handler resets the signal handler and re-raises. ([#1572](https://github.com/getsentry/sentry-native/pull/1572))
+
 ## 0.13.2
 
 **Features**:
@@ -109,7 +122,6 @@
 - Add runtime API to query user consent requirement. ([#1443](https://github.com/getsentry/sentry-native/pull/1443))
 - Add logs flush on `sentry_flush()`. ([#1434](https://github.com/getsentry/sentry-native/pull/1434))
 - Add global attributes API. These are added to all `sentry_log_X` calls. ([#1450](https://github.com/getsentry/sentry-native/pull/1450))
-
 
 ## 0.12.1
 
