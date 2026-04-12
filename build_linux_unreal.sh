@@ -89,7 +89,8 @@ ICU_MINOR=3
 ICU_VER="${ICU_MAJOR}.${ICU_MINOR}"
 ICU_VER_DASH="${ICU_MAJOR}-${ICU_MINOR}"
 ICU_TAR="icu4c-${ICU_VER}-sources.tgz"
-wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER_DASH}/${ICU_TAR}"
+wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER}/${ICU_TAR}"
+
 tar xf "${ICU_TAR}"
 rm "${ICU_TAR}"
 cd icu/source
