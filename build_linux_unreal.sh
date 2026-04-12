@@ -86,7 +86,7 @@ cd ..
 # Build ICU
 ICU_MAJOR=78
 ICU_MINOR=3
-ICU_VER="${ICU_MAJOR}_${ICU_MINOR}"
+ICU_VER="${ICU_MAJOR}.${ICU_MINOR}"
 ICU_VER_DASH="${ICU_MAJOR}-${ICU_MINOR}"
 ICU_TAR="icu4c-${ICU_VER}-sources.tgz"
 wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER_DASH}/${ICU_TAR}"
