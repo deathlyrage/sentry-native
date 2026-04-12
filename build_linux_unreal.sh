@@ -73,7 +73,7 @@ make install
 cd ..
 
 # Install OpenSSL in Sysroot
-OPENSSL_VER="3.5.1"
+OPENSSL_VER="3.6.2"
 wget https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
 tar xf openssl-$OPENSSL_VER.tar.gz
 rm openssl-$OPENSSL_VER.tar.gz
@@ -84,11 +84,11 @@ make install_sw
 cd ..
 
 # Build ICU
-ICU_MAJOR=77
-ICU_MINOR=1
+ICU_MAJOR=78
+ICU_MINOR=3
 ICU_VER="${ICU_MAJOR}_${ICU_MINOR}"
 ICU_VER_DASH="${ICU_MAJOR}-${ICU_MINOR}"
-ICU_TAR="icu4c-${ICU_VER}-src.tgz"
+ICU_TAR="icu4c-${ICU_VER}-sources.tgz"
 wget "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER_DASH}/${ICU_TAR}"
 tar xf "${ICU_TAR}"
 rm "${ICU_TAR}"
