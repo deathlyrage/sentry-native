@@ -20,7 +20,7 @@ fi
 
 
 # Toolchain download information
-TOOLCHAIN_VER="v25_clang-18.1.0-rockylinux8"
+TOOLCHAIN_VER="v26_clang-20.1.8-rockylinux8"
 TOOLCHAIN_URL="https://cdn.unrealengine.com/Toolchain_Linux/native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_ARCHIVE="native-linux-${TOOLCHAIN_VER}.tar.gz"
 TOOLCHAIN_DIR="$TOOLCHAIN_VER"
@@ -118,7 +118,7 @@ cd ../..
 #cd ..
 
 # Install Curl in Sysroot							
-CURL_VER="8.15.0"
+CURL_VER="8.19.0"
 wget https://curl.se/download/curl-$CURL_VER.tar.gz
 tar xf curl-$CURL_VER.tar.gz
 cd curl-$CURL_VER
