@@ -5,8 +5,10 @@ import platform
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
+
+import tests
 
 import msgpack
 
@@ -260,6 +262,8 @@ def assert_attachment(envelope):
 def assert_logs(envelope, expected_item_count=1, expected_trace_id=None):
     logs = None
     for item in envelope:
+        if item.headers.get("type") == "client_report":
+            continue
         assert item.headers.get("type") == "log"
         # >= because of random #lost logs in test_logs_threaded
         assert item.headers.get("item_count") >= expected_item_count
@@ -292,6 +296,8 @@ def assert_logs(envelope, expected_item_count=1, expected_trace_id=None):
 def assert_metrics(envelope, expected_item_count=1, expected_trace_id=None):
     metrics = None
     for item in envelope:
+        if item.headers.get("type") == "client_report":
+            continue
         assert item.headers.get("type") == "trace_metric"
         assert item.headers.get("item_count") >= expected_item_count
         assert (
@@ -360,8 +366,10 @@ def assert_minidump(envelope):
 
 
 def assert_timestamp(ts):
-    elapsed_time = datetime.now(UTC) - datetime.fromisoformat(ts)
-    assert elapsed_time.total_seconds() < 10
+    dt = datetime.fromisoformat(ts)
+    # 1s tolerance for `date +%s` truncation in device clock offset measurement
+    assert dt <= tests.now() + timedelta(seconds=1), "timestamp is in the future"
+    assert dt >= tests.test_start, "timestamp is in the past"
 
 
 def assert_event(envelope, message="Hello World!", expected_trace_id=""):
@@ -546,6 +554,66 @@ def assert_gzip_content_encoding(req):
     assert req.content_encoding == "gzip"
 
 
+def assert_client_report(envelope, expected_discards=None):
+    """
+    Assert that the envelope contains a client_report item.
+
+    Args:
+        envelope: The envelope to check
+        expected_discards: Optional list of dicts with expected discarded_events entries.
+            Each dict should have 'reason', 'category', and optionally 'quantity' keys.
+            If quantity is not specified, it just checks that count > 0.
+    """
+    client_report = None
+    for item in envelope:
+        if (
+            item.headers.get("type") == "client_report"
+            and item.payload.json is not None
+        ):
+            client_report = item.payload.json
+            break
+
+    assert client_report is not None, "No client_report item found in envelope"
+
+    # Check timestamp exists and is valid
+    assert "timestamp" in client_report
+    assert_timestamp(client_report["timestamp"])
+
+    # Check discarded_events array exists
+    assert "discarded_events" in client_report
+    discarded_events = client_report["discarded_events"]
+    assert isinstance(discarded_events, list)
+    assert len(discarded_events) > 0
+
+    # Validate each discarded event entry
+    for entry in discarded_events:
+        assert "reason" in entry
+        assert "category" in entry
+        assert "quantity" in entry
+        assert entry["quantity"] > 0
+
+    # Check expected discards if provided
+    if expected_discards:
+        for expected in expected_discards:
+            found = False
+            for entry in discarded_events:
+                if (
+                    entry["reason"] == expected["reason"]
+                    and entry["category"] == expected["category"]
+                ):
+                    if "quantity" in expected:
+                        assert entry["quantity"] == expected["quantity"], (
+                            f"Expected quantity {expected['quantity']} for {expected['reason']}/{expected['category']}, "
+                            f"got {entry['quantity']}"
+                        )
+                    found = True
+                    break
+            assert found, (
+                f"Expected discard entry with reason={expected['reason']}, "
+                f"category={expected['category']} not found"
+            )
+
+
 def assert_no_proxy_request(stdout):
     assert "POST" not in stdout
 
@@ -559,11 +627,12 @@ def assert_failed_proxy_auth_request(stdout):
 
 
 def wait_for_file(path, timeout=10.0, poll_interval=0.1):
+    import glob
     import time
 
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if path.exists():
+        if glob.glob(str(path)):
             return True
         time.sleep(poll_interval)
     return False

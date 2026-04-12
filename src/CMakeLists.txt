@@ -8,6 +8,8 @@ sentry_target_sources_cwd(sentry
 	sentry_batcher.c
 	sentry_batcher.h
 	sentry_boot.h
+	sentry_client_report.c
+	sentry_client_report.h
 	sentry_core.c
 	sentry_core.h
 	sentry_cpu_relax.h
@@ -34,6 +36,8 @@ sentry_target_sources_cwd(sentry
 	sentry_process.h
 	sentry_ratelimiter.c
 	sentry_ratelimiter.h
+	sentry_retry.c
+	sentry_retry.h
 	sentry_ringbuffer.c
 	sentry_ringbuffer.h
 	sentry_sampling_context.h

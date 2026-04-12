@@ -5,6 +5,7 @@
 
 #include "sentry_attachment.h"
 #include "sentry_backend.h"
+#include "sentry_client_report.h"
 #include "sentry_core.h"
 #include "sentry_database.h"
 #include "sentry_envelope.h"
@@ -171,6 +172,8 @@ sentry_init(sentry_options_t *options)
 
     sentry_close();
 
+    sentry__client_report_reset();
+
     sentry_logger_t logger = { NULL, NULL, SENTRY_LEVEL_DEBUG };
 
     if (options->debug) {
@@ -292,8 +295,10 @@ sentry_init(sentry_options_t *options)
         backend->prune_database_func(backend);
     }
 
-    if (options->cache_keep) {
-        sentry__cleanup_cache(options);
+    if (options->cache_keep || options->http_retry) {
+        if (!sentry__transport_submit_cleanup(options->transport, options)) {
+            sentry__cleanup_cache(options);
+        }
     }
 
     if (options->auto_session_tracking) {
@@ -621,6 +626,8 @@ sentry__capture_event(sentry_value_t event, sentry_scope_t *local_scope)
             bool should_skip = !sentry__roll_dice(options->sample_rate);
             if (should_skip) {
                 SENTRY_INFO("throwing away event due to sample rate");
+                sentry__client_report_discard(SENTRY_DISCARD_REASON_SAMPLE_RATE,
+                    SENTRY_DATA_CATEGORY_ERROR, 1);
                 sentry_envelope_free(envelope);
             } else {
                 sentry__capture_envelope(options->transport, envelope);
@@ -714,6 +721,8 @@ sentry__prepare_event(const sentry_options_t *options, sentry_value_t event,
             = options->before_send_func(event, NULL, options->before_send_data);
         if (sentry_value_is_null(event)) {
             SENTRY_DEBUG("event was discarded by the `before_send` hook");
+            sentry__client_report_discard(SENTRY_DISCARD_REASON_BEFORE_SEND,
+                SENTRY_DATA_CATEGORY_ERROR, 1);
             return NULL;
         }
     }
@@ -765,6 +774,8 @@ sentry__prepare_transaction(const sentry_options_t *options,
         if (sentry_value_is_null(transaction)) {
             SENTRY_DEBUG(
                 "transaction was discarded by the `before_transaction` hook");
+            sentry__client_report_discard(SENTRY_DISCARD_REASON_BEFORE_SEND,
+                SENTRY_DATA_CATEGORY_TRANSACTION, 1);
             return NULL;
         }
     }
@@ -1660,44 +1671,44 @@ sentry_capture_feedback_with_hint(
 }
 
 bool
-sentry__launch_external_crash_reporter(sentry_envelope_t *envelope)
+sentry__launch_external_crash_reporter(
+    const sentry_options_t *options, sentry_envelope_t *envelope)
 {
-    SENTRY_WITH_OPTIONS (options) {
-        if (!options->external_crash_reporter) {
-            return false;
-        }
+    if (!options || !options->run || !options->external_crash_reporter
+        || !options->external_crash_reporter->path
+        || options->external_crash_reporter->path[0] == '\0') {
+        return false;
+    }
 
-        sentry_uuid_t event_id = sentry__envelope_get_event_id(envelope);
-        char *envelope_filename
-            = sentry__uuid_as_filename(&event_id, ".envelope");
-        if (!envelope_filename) {
-            return false;
-        }
+    sentry_uuid_t event_id = sentry__envelope_get_event_id(envelope);
+    char *envelope_filename = sentry__uuid_as_filename(&event_id, ".envelope");
+    if (!envelope_filename) {
+        return false;
+    }
 
-        sentry_path_t *report_path = sentry__path_join_str(
-            options->run->external_path, envelope_filename);
-        if (!report_path) {
-            sentry_free(envelope_filename);
-            return false;
-        }
+    sentry_path_t *report_path
+        = sentry__path_join_str(options->run->external_path, envelope_filename);
+    if (!report_path) {
+        sentry_free(envelope_filename);
+        return false;
+    }
 
-        // capture the envelope with the disk transport
-        sentry_transport_t *disk_transport
-            = sentry_new_external_disk_transport(options->run);
-        if (!disk_transport) {
-            sentry__path_free(report_path);
-            sentry_free(envelope_filename);
-            return false;
-        }
-        sentry__capture_envelope(disk_transport, envelope);
-        sentry__transport_dump_queue(disk_transport, options->run);
-        sentry_transport_free(disk_transport);
-
-        sentry__process_spawn(
-            options->external_crash_reporter, report_path->path, NULL);
+    // capture the envelope with the disk transport
+    sentry_transport_t *disk_transport
+        = sentry_new_external_disk_transport(options->run);
+    if (!disk_transport) {
         sentry__path_free(report_path);
         sentry_free(envelope_filename);
+        return false;
     }
+    sentry__transport_send_envelope(disk_transport, envelope);
+    sentry__transport_dump_queue(disk_transport, options->run);
+    sentry_transport_free(disk_transport);
+
+    sentry__process_spawn(
+        options->external_crash_reporter, report_path->path, NULL);
+    sentry__path_free(report_path);
+    sentry_free(envelope_filename);
     return true;
 }
 

@@ -190,7 +190,7 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
                 sentry__attachment_free(screenshot);
             }
 
-            if (!sentry__launch_external_crash_reporter(envelope)) {
+            if (!sentry__launch_external_crash_reporter(options, envelope)) {
                 // capture the envelope with the disk transport
                 sentry_transport_t *disk_transport
                     = sentry_new_disk_transport(options->run);
@@ -322,6 +322,11 @@ breakpad_backend_except(
 }
 
 extern "C" {
+
+void
+sentry__backend_preload(void)
+{
+}
 
 sentry_backend_t *
 sentry__backend_new(void)

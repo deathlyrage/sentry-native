@@ -5,6 +5,7 @@
 #include "sentry_core.h"
 
 #include "sentry_attachment.h"
+#include "sentry_client_report.h"
 #include "sentry_path.h"
 #include "sentry_ratelimiter.h"
 #include "sentry_session.h"
@@ -99,6 +100,26 @@ void sentry__envelope_add_attachments(
     sentry_envelope_t *envelope, const sentry_attachment_t *attachments);
 
 /**
+ * Returns true if a client report can be added to the envelope, i.e., the
+ * envelope is structured (not raw) and has at least one non-internal item
+ * that is not rate-limited.
+ */
+bool sentry__envelope_can_add_client_report(
+    const sentry_envelope_t *envelope, const sentry_rate_limiter_t *rl);
+
+/**
+ * Serialize a client report and add it to the envelope.
+ */
+sentry_envelope_item_t *sentry__envelope_add_client_report(
+    sentry_envelope_t *envelope, const sentry_client_report_t *report);
+
+/**
+ * Record discards for all non-internal items in the envelope.
+ */
+void sentry__envelope_discard(const sentry_envelope_t *envelope,
+    sentry_discard_reason_t reason, const sentry_rate_limiter_t *rl);
+
+/**
  * This will add the file contents from `path` as an envelope item of type
  * `type`.
  */
@@ -146,6 +167,14 @@ void sentry__envelope_serialize_into_stringbuilder(
  */
 MUST_USE int sentry_envelope_write_to_path(
     const sentry_envelope_t *envelope, const sentry_path_t *path);
+
+/**
+ * Cache the envelope unless it already exists in the cache directory.
+ * Minidump attachments are extracted as separate `<uuid>.dmp` files
+ * alongside the `<uuid>.envelope` (and excluded from the envelope file).
+ */
+int sentry__envelope_write_to_cache(
+    const sentry_envelope_t *envelope, const sentry_path_t *cache_dir);
 
 // these for now are only needed for tests
 #ifdef SENTRY_UNITTEST

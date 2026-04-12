@@ -24,6 +24,7 @@ add_executable(sentry_test_unit
 	test_attachments.c
 	test_basic.c
 	test_cache.c
+	test_client_report.c
 	test_consent.c
 	test_concurrency.c
 	test_embedded_info.c
@@ -43,6 +44,7 @@ add_executable(sentry_test_unit
 	test_path.c
 	test_process.c
 	test_ratelimiter.c
+	test_retry.c
 	test_ringbuffer.c
 	test_sampling.c
 	test_scope.c

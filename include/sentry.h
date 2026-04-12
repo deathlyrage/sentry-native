@@ -59,6 +59,8 @@ extern "C" {
 #    define SENTRY_PLATFORM_WINDOWS
 #    ifdef _GAMING_XBOX
 #        define SENTRY_PLATFORM_XBOX
+#    elif defined(_GAMING_DESKTOP)
+#        define SENTRY_PLATFORM_WINGDK
 #    endif
 #elif defined(__APPLE__)
 #    include <TargetConditionals.h>
@@ -95,12 +97,14 @@ extern "C" {
 #        define SENTRY_SDK_NAME "sentry.native.android"
 #    elif defined(SENTRY_PLATFORM_XBOX)
 #        define SENTRY_SDK_NAME "sentry.native.xbox"
+#    elif defined(SENTRY_PLATFORM_WINGDK)
+#        define SENTRY_SDK_NAME "sentry.native.wingdk"
 #    else
 #        define SENTRY_SDK_NAME "sentry.native"
 #    endif
 #endif
 #ifndef SENTRY_SDK_VERSION
-#    define SENTRY_SDK_VERSION "0.13.3"
+#    define SENTRY_SDK_VERSION "0.13.6"
 #endif
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
@@ -947,6 +951,24 @@ SENTRY_API void sentry_transport_set_shutdown_func(
     int (*shutdown_func)(uint64_t timeout, void *state));
 
 /**
+ * Retries sending all pending envelopes in the transport's retry queue,
+ * e.g. when coming back online. Only applicable for HTTP transports.
+ *
+ * Note: The SDK automatically retries failed envelopes on next application
+ * startup. This function allows manual triggering of pending retries at
+ * runtime. Each envelope is retried up to 6 times. If all attempts are
+ * exhausted during intermittent connectivity, events will be discarded
+ * (or moved to cache if enabled via sentry_options_set_cache_keep).
+ *
+ * Warning: This function has no rate limiting - it will immediately
+ * attempt to send all pending envelopes. Calling this repeatedly during
+ * extended network outages may exhaust retry attempts that might have
+ * succeeded with the SDK's built-in exponential backoff.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_transport_retry(
+    sentry_transport_t *transport);
+
+/**
  * Generic way to free transport.
  */
 SENTRY_API void sentry_transport_free(sentry_transport_t *transport);
@@ -1476,12 +1498,14 @@ SENTRY_API int sentry_options_get_symbolize_stacktraces(
     const sentry_options_t *opts);
 
 /**
- * Enables or disables storing envelopes in a persistent cache.
+ * Enables or disables storing envelopes that fail to send in a persistent
+ * cache.
  *
- * When enabled, envelopes are written to a `cache/` subdirectory within the
- * database directory and retained regardless of send success or failure.
- * The cache is cleared on startup based on the cache_max_items, cache_max_size,
- * and cache_max_age options.
+ * When enabled, envelopes that fail to send are written to a `cache/`
+ * subdirectory within the database directory. The cache is cleared on startup
+ * based on the cache_max_items, cache_max_size, and cache_max_age options.
+ *
+ * Only applicable for HTTP transports.
  *
  * Disabled by default.
  */
@@ -1845,7 +1869,10 @@ SENTRY_API int sentry_flush(uint64_t timeout);
  *
  * Note that this does not uninstall any crash handler installed by our
  * backends, which will still process crashes after `sentry_close()`, except
- * when using `crashpad` on Linux or the `inproc` backend.
+ * when using `crashpad` on Linux or the `inproc` backend. The Android
+ * preload mode of `inproc` is a special case: a lightweight signal-chain
+ * placeholder may remain installed across `sentry_close()` to preserve
+ * ordering relative to the managed runtime until a later re-init.
  *
  * Further note that this function will block the thread it was called from
  * until the sentry background worker has finished its work, or it timed out,
@@ -2259,6 +2286,18 @@ SENTRY_EXPERIMENTAL_API int sentry_options_get_enable_logs(
     const sentry_options_t *opts);
 
 /**
+ * Enables or disables HTTP retry with exponential backoff for network failures.
+ *
+ * Only applicable for HTTP transports.
+ *
+ * Disabled by default.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_options_set_http_retry(
+    sentry_options_t *opts, int enabled);
+SENTRY_EXPERIMENTAL_API int sentry_options_get_http_retry(
+    const sentry_options_t *opts);
+
+/**
  * Enables or disables custom attributes parsing for structured logging.
  *
  * When enabled, all `sentry_log_X()` functions expect a `sentry_value_t` object
@@ -2270,6 +2309,27 @@ SENTRY_EXPERIMENTAL_API int sentry_options_get_enable_logs(
 SENTRY_EXPERIMENTAL_API void sentry_options_set_logs_with_attributes(
     sentry_options_t *opts, int logs_with_attributes);
 SENTRY_EXPERIMENTAL_API int sentry_options_get_logs_with_attributes(
+    const sentry_options_t *opts);
+
+/**
+ * Enables or disables client reports.
+ *
+ * Client reports allow the SDK to track and report why events were discarded
+ * before being sent to Sentry (e.g., due to sampling, hooks, rate limiting,
+ * network or send errors, queue overflow, etc.).
+ *
+ * When enabled (the default), client reports are opportunistically attached to
+ * outgoing envelopes to minimize HTTP requests.
+ *
+ * See https://develop.sentry.dev/sdk/telemetry/client-reports/ for details.
+ */
+SENTRY_API void sentry_options_set_send_client_reports(
+    sentry_options_t *opts, int val);
+
+/**
+ * Returns true if client reports are enabled.
+ */
+SENTRY_API int sentry_options_get_send_client_reports(
     const sentry_options_t *opts);
 
 /**
@@ -2366,6 +2426,8 @@ SENTRY_EXPERIMENTAL_API void sentry_options_set_before_send_log(
 /**
  * Enables or disables the metrics feature.
  * When disabled, all calls to `sentry_metrics_*()` are no-ops.
+ *
+ * Enabled by default.
  */
 SENTRY_EXPERIMENTAL_API void sentry_options_set_enable_metrics(
     sentry_options_t *opts, int enable_metrics);
