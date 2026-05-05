@@ -3,6 +3,7 @@
 
 #include "sentry_boot.h"
 
+#include "sentry_attachment.h"
 #include "sentry_path.h"
 #include "sentry_session.h"
 
@@ -14,7 +15,36 @@ typedef struct sentry_run_s {
     sentry_path_t *cache_path;
     sentry_filelock_t *lock;
     long refcount;
+    long retain; // (atomic) bool
+    long require_user_consent; // (atomic) bool
+    long user_consent; // (atomic) sentry_user_consent_t
+    char *installation_id;
 } sentry_run_t;
+
+/**
+ * This function will check the user consent, and return `true` if uploads
+ * should *not* be sent to the sentry server, and be discarded instead.
+ *
+ * This is a lock-free variant of `sentry__should_skip_upload`, safe to call
+ * from worker threads while the options are locked during SDK shutdown.
+ */
+bool sentry__run_should_skip_upload(sentry_run_t *run);
+
+/**
+ * Loads the persisted user consent (`<database>/user-consent`) into the run.
+ */
+void sentry__run_load_user_consent(
+    sentry_run_t *run, const sentry_path_t *database_path);
+
+/**
+ * Loads or creates the persisted installation ID. The file
+ * `<database>/installation_id` stores a UUIDv4 on line 1 and the given
+ * `public_key` on line 2. If the stored key matches, the UUID is reused;
+ * otherwise a new one is generated and the file is rewritten. A NULL
+ * `public_key` is treated as an empty string.
+ */
+void sentry__run_load_installation_id(sentry_run_t *run,
+    const sentry_path_t *database_path, const char *public_key);
 
 /**
  * This creates a new application run including its associated directory and
@@ -32,7 +62,7 @@ sentry_run_t *sentry__run_incref(sentry_run_t *run);
 /**
  * This will clean up all the files belonging to this run.
  */
-void sentry__run_clean(sentry_run_t *run);
+void sentry__run_clean(sentry_run_t *run, bool force);
 
 /**
  * Free the previously allocated run.
@@ -48,6 +78,27 @@ void sentry__run_free(sentry_run_t *run);
  */
 bool sentry__run_write_envelope(
     const sentry_run_t *run, const sentry_envelope_t *envelope);
+
+/**
+ * Cache an attachment to a sibling of the cached envelope and append an
+ * `attachment-ref` item whose payload carries the on-disk basename in the
+ * `path` field. Regular attachments are stored as
+ * `<event_id>-<sanitized-basename>`; minidumps keep the legacy
+ * `<event_id>.dmp` shape.
+ *
+ * `run_path` enables a rename (instead of a copy) when the source is inside
+ * that directory; pass NULL to always copy.
+ */
+bool sentry__cache_attachment_ref(sentry_envelope_t *envelope,
+    const sentry_attachment_t *attachment, const sentry_path_t *cache_path,
+    const sentry_path_t *run_path);
+
+/**
+ * Cache every attachment that should be represented as an attachment-ref.
+ */
+void sentry__cache_attachment_refs(sentry_envelope_t *envelope,
+    const sentry_attachment_t *attachments, const sentry_options_t *options,
+    const sentry_path_t *cache_path, const sentry_path_t *run_path);
 
 /**
  * This will serialize and write the given envelope to disk into a file named
@@ -110,11 +161,26 @@ void sentry__process_old_runs(
     const sentry_options_t *options, uint64_t last_crash);
 
 /**
- * Parses a retry cache filename: `<ts>-<count>-<uuid>.envelope`.
- * Returns false for plain cache filenames (`<uuid>.envelope`).
+ * Parses a cache filename in either form:
+ *   - `<uuid>.envelope` sets `*ts_out = 0`, `*count_out = -1`.
+ *   - `<ts>-<count>-<uuid>.envelope` is retry form, count >= 0.
+ * `*uuid_out` points into `filename` at the start of the 36-char UUID.
+ * Callers that want only retry-format entries should additionally check
+ * `count >= 0`.
  */
 bool sentry__parse_cache_filename(const char *filename, uint64_t *ts_out,
     int *count_out, const char **uuid_out);
+
+/**
+ * Removes an envelope and any cache siblings sharing the same UUID prefix.
+ */
+void sentry__cache_remove_envelope(const sentry_path_t *envelope_path);
+
+/**
+ * Removes cache siblings sharing the given event UUID prefix.
+ */
+void sentry__cache_remove_siblings(
+    const sentry_run_t *run, const sentry_uuid_t *event_id);
 
 /**
  * Cleans up the cache based on options.cache_max_items,

@@ -104,7 +104,7 @@ extern "C" {
 #    endif
 #endif
 #ifndef SENTRY_SDK_VERSION
-#    define SENTRY_SDK_VERSION "0.13.6"
+#    define SENTRY_SDK_VERSION "0.14.0"
 #endif
 #define SENTRY_SDK_USER_AGENT SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION
 
@@ -1439,9 +1439,15 @@ SENTRY_API void sentry_options_set_logger(
 
 /**
  * Enables or disables console logging after a crash.
+ *
  * When disabled, Sentry will not invoke logger callbacks after a crash
  * has been detected. This can be useful to avoid potential issues during
- * crash handling that logging might cause. This is enabled by default.
+ * crash handling that logging might cause.
+ *
+ * Enabled by default, except for the breakpad backend on macOS, where
+ * it defaults to off because the in-process Mach exception handler can
+ * deadlock on stdio locks held by threads that were suspended at crash
+ * time.
  */
 SENTRY_API void sentry_options_set_logger_enabled_when_crashed(
     sentry_options_t *opts, int enabled);
@@ -1470,6 +1476,11 @@ SENTRY_API int sentry_options_get_auto_session_tracking(
  * This disables uploads until the user has given the consent to the SDK.
  * Consent itself is given with `sentry_user_consent_give` and
  * `sentry_user_consent_revoke`.
+ *
+ * When combined with `cache_keep` or `http_retry`, envelopes captured
+ * while consent is revoked are written to the cache directory instead
+ * of being discarded. With `http_retry` enabled, cached envelopes are
+ * sent automatically once consent is given.
  */
 SENTRY_API void sentry_options_set_require_user_consent(
     sentry_options_t *opts, int val);
@@ -1504,6 +1515,10 @@ SENTRY_API int sentry_options_get_symbolize_stacktraces(
  * When enabled, envelopes that fail to send are written to a `cache/`
  * subdirectory within the database directory. The cache is cleared on startup
  * based on the cache_max_items, cache_max_size, and cache_max_age options.
+ *
+ * When combined with `sentry_options_set_require_user_consent`, envelopes
+ * captured while consent is revoked are also written to the cache. With
+ * `http_retry` enabled, they are sent once consent is given.
  *
  * Only applicable for HTTP transports.
  *
@@ -1580,12 +1595,46 @@ SENTRY_API void sentry_options_add_view_hierarchy_n(
  * Enables or disables attaching screenshots to fatal error events. Disabled by
  * default.
  *
- * This feature is currently supported by all backends on Windows. Only the
- * `crashpad` backend can capture screenshots of fast-fail crashes that bypass
- * SEH (structured exception handling).
+ * This feature is currently supported by all backends on Windows. The
+ * `crashpad` and `native` backends capture screenshots from an out-of-process
+ * handler. Only the `crashpad` backend can capture screenshots of fast-fail
+ * crashes that bypass SEH (structured exception handling).
+ *
+ * To decide per-event whether a screenshot should be captured, set a
+ * `before_screenshot` callback via `sentry_options_set_before_screenshot`.
  */
 SENTRY_EXPERIMENTAL_API void sentry_options_set_attach_screenshot(
     sentry_options_t *opts, int val);
+
+/**
+ * Type of the `before_screenshot` callback.
+ *
+ * The callback is invoked before a screenshot is captured for an event. It
+ * receives the event (without ownership) and should return non-zero to capture
+ * the screenshot, or zero to skip it. The `attach_screenshot` option must be
+ * enabled for screenshots to be considered at all.
+ *
+ * Capturing screenshots is only supported on Windows, so the callback is
+ * only invoked there. The callback is not supported by the `crashpad`
+ * backend, which captures screenshots from its out-of-process handler.
+ *
+ * The callback may be called from inside an `UnhandledExceptionFilter`, see
+ * the documentation on SEH (structured exception handling) for more
+ * information
+ * https://docs.microsoft.com/en-us/windows/win32/debug/structured-exception-handling
+ */
+typedef int (*sentry_before_screenshot_function_t)(
+    sentry_value_t event, void *user_data);
+
+/**
+ * Sets the `before_screenshot` callback.
+ *
+ * See the `sentry_before_screenshot_function_t` typedef above for more
+ * information.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_options_set_before_screenshot(
+    sentry_options_t *opts, sentry_before_screenshot_function_t func,
+    void *user_data);
 
 /**
  * Sets the path to the crashpad handler if the crashpad backend is used.
@@ -1791,8 +1840,8 @@ sentry_options_get_crash_reporting_mode(const sentry_options_t *opts);
  * Enables a wait for the crash report upload to be finished before shutting
  * down. This is disabled by default.
  *
- * This setting only has an effect when using the `crashpad` backend on Linux
- * and Windows.
+ * This setting only has an effect when using the `crashpad` backend on Linux,
+ * Windows and macOS.
  */
 SENTRY_API void sentry_options_set_crashpad_wait_for_upload(
     sentry_options_t *opts, int wait_for_upload);
@@ -1920,6 +1969,9 @@ SENTRY_EXPERIMENTAL_API int sentry_reinstall_backend(void);
 
 /**
  * Gives user consent.
+ *
+ * Schedules a retry of any envelopes cached while consent was revoked,
+ * provided that `http_retry` is enabled.
  */
 SENTRY_API void sentry_user_consent_give(void);
 
@@ -2279,6 +2331,8 @@ SENTRY_EXPERIMENTAL_API int sentry_options_get_propagate_traceparent(
 /**
  * Enables or disables the structured logging feature.
  * When disabled, all calls to `sentry_log_X()` are no-ops.
+ *
+ * Enabled by default.
  */
 SENTRY_EXPERIMENTAL_API void sentry_options_set_enable_logs(
     sentry_options_t *opts, int enable_logs);
@@ -2295,6 +2349,25 @@ SENTRY_EXPERIMENTAL_API int sentry_options_get_enable_logs(
 SENTRY_EXPERIMENTAL_API void sentry_options_set_http_retry(
     sentry_options_t *opts, int enabled);
 SENTRY_EXPERIMENTAL_API int sentry_options_get_http_retry(
+    const sentry_options_t *opts);
+
+/**
+ * Enables or disables out-of-band upload of large attachments.
+ *
+ * When enabled, attachments above an internal size threshold are uploaded
+ * via a separate request before the envelope is sent, and referenced from
+ * the envelope by location instead of being embedded inline. When disabled,
+ * attachments are embedded in the envelope and oversized uploads are rejected
+ * by Sentry.
+ *
+ * Note: Requires the `projects:relay-upload-endpoint` server feature. See
+ * https://develop.sentry.dev/sdk/telemetry/attachments/#attachment-placeholders
+ *
+ * Disabled by default.
+ */
+SENTRY_EXPERIMENTAL_API void sentry_options_set_enable_large_attachments(
+    sentry_options_t *opts, int enable_large_attachments);
+SENTRY_EXPERIMENTAL_API int sentry_options_get_enable_large_attachments(
     const sentry_options_t *opts);
 
 /**

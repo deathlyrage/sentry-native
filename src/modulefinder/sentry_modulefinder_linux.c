@@ -10,7 +10,6 @@
 #include "sentry_utils.h"
 #include "sentry_value.h"
 
-#include <arpa/inet.h>
 #include <elf.h>
 #include <fcntl.h>
 #include <string.h>
@@ -141,9 +140,12 @@ read_safely(void *dst, void *src, size_t size)
     // See https://github.com/getsentry/sentry-native/issues/578).
     // Also, the syscall is only available in Linux 3.2, meaning Android 17.
     // In that case we get an `EINVAL`.
+    // Additionally, in some seccomp-restricted environments,
+    // `process_vm_readv` may be unavailable and fail with `ENOSYS` (see
+    // https://github.com/getsentry/sentry-native/issues/1653).
     //
-    // In either of these cases, just fall back to an unsafe `memcpy`.
-    if (!rv && (errno == EPERM || errno == EINVAL)) {
+    // In any of these cases, just fall back to an unsafe `memcpy`.
+    if (!rv && (errno == EPERM || errno == EINVAL || errno == ENOSYS)) {
         memcpy(dst, src, size);
         rv = true;
     }
@@ -493,13 +495,7 @@ sentry__procmaps_read_ids_from_elf(
     // https://getsentry.github.io/symbolicator/advanced/symbol-server-compatibility/#identifiers
     // in particular, the debug_id is a `little-endian GUID`, so we have
     // to do appropriate byte-flipping
-    char *uuid_bytes = uuid.bytes;
-    uint32_t *a = (uint32_t *)uuid_bytes;
-    *a = htonl(*a);
-    uint16_t *b = (uint16_t *)(uuid_bytes + 4);
-    *b = htons(*b);
-    uint16_t *c = (uint16_t *)(uuid_bytes + 6);
-    *c = htons(*c);
+    sentry__uuid_swap_guid_bytes(uuid.bytes);
 
     sentry_value_set_by_key(value, "debug_id", sentry__value_new_uuid(&uuid));
     return true;

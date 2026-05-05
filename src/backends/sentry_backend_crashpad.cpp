@@ -54,6 +54,7 @@ extern "C" {
 #    pragma clang diagnostic ignored                                           \
         "-Winconsistent-missing-destructor-override"
 #endif
+#include "base/logging.h"
 #include "client/crash_report_database.h"
 #include "client/crashpad_client.h"
 #include "client/crashpad_info.h"
@@ -153,7 +154,19 @@ crashpad_backend_user_consent_changed(sentry_backend_t *backend)
     if (!data->db || !data->db->GetSettings()) {
         return;
     }
-    data->db->GetSettings()->SetUploadsEnabled(!sentry__should_skip_upload());
+    const bool enabled = !sentry__should_skip_upload();
+    bool paused = false;
+    if (!enabled) {
+        SENTRY_WITH_OPTIONS (options) {
+            paused = options->cache_keep || options->http_retry;
+        }
+    }
+    auto *settings = data->db->GetSettings();
+    settings->SetUploadsEnabled(enabled);
+    settings->SetUploadsPaused(paused);
+    if (enabled && data->client) {
+        data->client->RequestRetry();
+    }
 }
 
 #ifdef SENTRY_PLATFORM_WINDOWS
@@ -381,7 +394,7 @@ crashpad_handler(int signum, siginfo_t *info, ucontext_t *user_context)
                 // capture the envelope with the disk transport
                 sentry_transport_t *disk_transport
                     = sentry_new_disk_transport(options->run);
-                sentry__capture_envelope(disk_transport, envelope);
+                sentry__capture_envelope(disk_transport, envelope, options);
                 sentry__transport_dump_queue(disk_transport, options->run);
                 sentry_transport_free(disk_transport);
             }
@@ -528,7 +541,11 @@ report_to_envelope(const crashpad::CrashReportDatabase::Report &report,
             &attachments, minidump_path, MINIDUMP, nullptr);
 
         if (sentry__envelope_add_event(envelope, event)) {
-            sentry__envelope_add_attachments(envelope, attachments);
+            sentry__envelope_add_attachments(envelope, attachments, options);
+            if (options->run) {
+                sentry__cache_attachment_refs(envelope, attachments, options,
+                    options->run->cache_path, options->run->run_path);
+            }
         } else {
             sentry_value_decref(event);
             sentry_envelope_free(envelope);
@@ -694,6 +711,38 @@ crashpad_backend_startup(
     }
 
     std::vector<std::string> arguments { "--no-rate-limit" };
+
+    // Map sentry's log level to mini_chromium's LogSeverity. They diverge at
+    // FATAL (sentry=3, mini_chromium=4); otherwise 1:1.
+    int level = static_cast<int>(options->logger.logger_level);
+    switch (options->logger.logger_level) {
+    case SENTRY_LEVEL_TRACE:
+    case SENTRY_LEVEL_DEBUG:
+        level = -1; // LOG_VERBOSE
+        break;
+    case SENTRY_LEVEL_INFO:
+    case SENTRY_LEVEL_WARNING:
+    case SENTRY_LEVEL_ERROR:
+        // LOG_INFO/WARNING/ERROR (0/1/2) match 1:1
+        break;
+    case SENTRY_LEVEL_FATAL:
+        level = 4; // LOG_FATAL
+        break;
+    }
+
+    sentry_path_t *log_path
+        = sentry__path_join_str(current_run_folder, "crashpad-handler.log");
+    if (log_path) {
+        arguments.push_back(std::string("--log-file=") + log_path->path);
+        sentry__path_free(log_path);
+    }
+    if (options->debug) {
+        logging::LoggingSettings settings;
+        settings.logging_dest = logging::LOG_TO_STDERR;
+        settings.min_log_level = level;
+        logging::InitLogging(settings);
+        arguments.push_back("--log-level=" + std::to_string(level));
+    }
 
     char report_id[37];
     sentry_uuid_as_string(&data->crash_event_id, report_id);
@@ -967,24 +1016,17 @@ crashpad_backend_prune_database(sentry_backend_t *backend)
 static bool
 ensure_unique_path(sentry_attachment_t *attachment)
 {
-    sentry_uuid_t uuid = sentry_uuid_new_v4();
-    char uuid_str[37];
-    sentry_uuid_as_string(&uuid, uuid_str);
-
-    sentry_path_t *base_path = nullptr;
+    sentry_path_t *path = nullptr;
     SENTRY_WITH_OPTIONS (options) {
-        base_path = sentry__path_join_str(options->run->run_path, uuid_str);
+        path = sentry__path_unique(options->run->run_path,
+            sentry__path_filename(attachment->filename));
     }
-    if (!base_path || sentry__path_create_dir_all(base_path) != 0) {
+    if (!path) {
         return false;
     }
 
-    sentry_path_t *old_path = attachment->path;
-    attachment->path = sentry__path_join_str(
-        base_path, sentry__path_filename(attachment->filename));
-
-    sentry__path_free(base_path);
-    sentry__path_free(old_path);
+    sentry__path_free(attachment->path);
+    attachment->path = path;
     return true;
 }
 
@@ -1041,7 +1083,6 @@ sentry__backend_new(void)
     if (!backend) {
         return nullptr;
     }
-    memset(backend, 0, sizeof(sentry_backend_t));
 
     auto *data = new (std::nothrow) crashpad_state_t {};
     if (!data) {

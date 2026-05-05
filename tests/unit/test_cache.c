@@ -3,6 +3,7 @@
 #include "sentry_envelope.h"
 #include "sentry_options.h"
 #include "sentry_path.h"
+#include "sentry_retry.h"
 #include "sentry_string.h"
 #include "sentry_testsupport.h"
 #include "sentry_uuid.h"
@@ -113,6 +114,23 @@ SENTRY_TEST(cache_max_size)
     TEST_ASSERT(sentry__path_remove_all(cache_path) == 0);
     TEST_ASSERT(sentry__path_create_dir_all(cache_path) == 0);
 
+    // Oldest entry is a retry-format envelope with a cache-sibling
+    // sibling. Pruning must remove the sibling too — otherwise the sibling
+    // would survive as an orphan and the cache_count assertion below trips.
+    sentry_uuid_t retry_id = sentry_uuid_new_v4();
+    char retry_uuid[37];
+    sentry_uuid_as_string(&retry_id, retry_uuid);
+    char retry_name[128];
+    snprintf(retry_name, sizeof(retry_name), "1700000000000-00-%.36s.envelope",
+        retry_uuid);
+    sentry_path_t *retry_path = sentry__path_join_str(cache_path, retry_name);
+    TEST_ASSERT(sentry__path_touch(retry_path) == 0);
+    char sib_name[128];
+    snprintf(sib_name, sizeof(sib_name), "%.36s-payload.bin", retry_uuid);
+    sentry_path_t *sib_path = sentry__path_join_str(cache_path, sib_name);
+    TEST_ASSERT(sentry__path_write_buffer(sib_path, "data", 4) == 0);
+    TEST_ASSERT(set_file_mtime(retry_path, time(NULL) - 3600) == 0);
+
     // 10 x 5 kb files
     for (int i = 0; i < 10; i++) {
         sentry_uuid_t event_id = sentry_uuid_new_v4();
@@ -145,7 +163,11 @@ SENTRY_TEST(cache_max_size)
 
     TEST_CHECK_INT_EQUAL(cache_count, 2);
     TEST_CHECK(cache_size <= 10 * 1024);
+    TEST_CHECK(!sentry__path_is_file(retry_path));
+    TEST_CHECK(!sentry__path_is_file(sib_path));
 
+    sentry__path_free(retry_path);
+    sentry__path_free(sib_path);
     sentry__path_free(cache_path);
     sentry_close();
 }
@@ -305,6 +327,190 @@ SENTRY_TEST(cache_max_items_with_retry)
     sentry__pathiter_free(iter);
 
     TEST_CHECK_INT_EQUAL(total_count, 7);
+
+    sentry__path_free(cache_path);
+    sentry_close();
+}
+
+SENTRY_TEST(cache_remove_siblings)
+{
+#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_PS)
+    SKIP_TEST();
+#endif
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+    sentry_init(options);
+
+    sentry_path_t *cache_path
+        = sentry__path_join_str(options->database_path, "cache");
+    TEST_ASSERT(!!cache_path);
+    TEST_ASSERT(sentry__path_remove_all(cache_path) == 0);
+    TEST_ASSERT(sentry__path_create_dir_all(cache_path) == 0);
+
+    sentry_path_t *retry_env_path = sentry__path_join_str(cache_path,
+        "1234567890-01-c993afb6-b4ac-48a6-b61b-2558e601d65d.envelope");
+    sentry_path_t *bare_env_path = sentry__path_join_str(
+        cache_path, "c993afb6-b4ac-48a6-b61b-2558e601d65d.envelope");
+    sentry_path_t *dmp_path = sentry__path_join_str(
+        cache_path, "c993afb6-b4ac-48a6-b61b-2558e601d65d.dmp");
+    sentry_path_t *sibling_path = sentry__path_join_str(
+        cache_path, "c993afb6-b4ac-48a6-b61b-2558e601d65d-attachment.bin");
+    sentry_path_t *unrelated_path = sentry__path_join_str(
+        cache_path, "c993afb6-b4ac-48a6-b61b-2558e601d65d_attachment.bin");
+    TEST_ASSERT(!!retry_env_path);
+    TEST_ASSERT(!!bare_env_path);
+    TEST_ASSERT(!!dmp_path);
+    TEST_ASSERT(!!sibling_path);
+    TEST_ASSERT(!!unrelated_path);
+
+    TEST_ASSERT(sentry__path_write_buffer(retry_env_path, "retry", 5) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(bare_env_path, "cached", 6) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(dmp_path, "dmp", 3) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(sibling_path, "attachment", 10) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(unrelated_path, "keep", 4) == 0);
+
+    sentry__cache_remove_envelope(retry_env_path);
+
+    TEST_CHECK(!sentry__path_is_file(retry_env_path));
+    TEST_CHECK(sentry__path_is_file(bare_env_path));
+    TEST_CHECK(!sentry__path_is_file(dmp_path));
+    TEST_CHECK(!sentry__path_is_file(sibling_path));
+    TEST_CHECK(sentry__path_is_file(unrelated_path));
+
+    sentry__path_remove(bare_env_path);
+    sentry__path_remove(unrelated_path);
+    sentry__path_free(retry_env_path);
+    sentry__path_free(bare_env_path);
+    sentry__path_free(dmp_path);
+    sentry__path_free(sibling_path);
+    sentry__path_free(unrelated_path);
+    sentry__path_free(cache_path);
+    sentry_close();
+}
+
+SENTRY_TEST(cache_prune_siblings)
+{
+#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_PS)
+    SKIP_TEST();
+#endif
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_cache_max_items(options, 1);
+    sentry_init(options);
+
+    sentry_path_t *cache_path
+        = sentry__path_join_str(options->database_path, "cache");
+    TEST_ASSERT(!!cache_path);
+    TEST_ASSERT(sentry__path_remove_all(cache_path) == 0);
+    TEST_ASSERT(sentry__path_create_dir_all(cache_path) == 0);
+
+    time_t now = time(NULL);
+    sentry_path_t *new_env = sentry__path_join_str(
+        cache_path, "c993afb6-b4ac-48a6-b61b-2558e601d65d.envelope");
+    sentry_path_t *old_env = sentry__path_join_str(
+        cache_path, "97e8cc2b-94f6-42ef-ae56-bc67015e7f22.envelope");
+    sentry_path_t *old_dmp = sentry__path_join_str(
+        cache_path, "97e8cc2b-94f6-42ef-ae56-bc67015e7f22.dmp");
+    sentry_path_t *old_sibling = sentry__path_join_str(
+        cache_path, "97e8cc2b-94f6-42ef-ae56-bc67015e7f22-attachment.bin");
+    TEST_ASSERT(!!new_env);
+    TEST_ASSERT(!!old_env);
+    TEST_ASSERT(!!old_dmp);
+    TEST_ASSERT(!!old_sibling);
+
+    TEST_ASSERT(sentry__path_touch(new_env) == 0);
+    TEST_ASSERT(sentry__path_touch(old_env) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(old_dmp, "dmp", 3) == 0);
+    TEST_ASSERT(sentry__path_write_buffer(old_sibling, "attachment", 10) == 0);
+    TEST_ASSERT(set_file_mtime(new_env, now) == 0);
+    TEST_ASSERT(set_file_mtime(old_env, now - 60) == 0);
+
+    sentry__cleanup_cache(options);
+
+    TEST_CHECK(sentry__path_is_file(new_env));
+    TEST_CHECK(!sentry__path_is_file(old_env));
+    TEST_CHECK(!sentry__path_is_file(old_dmp));
+    TEST_CHECK(!sentry__path_is_file(old_sibling));
+
+    sentry__path_free(new_env);
+    sentry__path_free(old_env);
+    sentry__path_free(old_dmp);
+    sentry__path_free(old_sibling);
+    sentry__path_free(cache_path);
+    sentry_close();
+}
+
+SENTRY_TEST(cache_consent_revoked)
+{
+#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_PS)
+    SKIP_TEST();
+#endif
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+    sentry_options_set_cache_keep(options, true);
+    sentry_options_set_require_user_consent(options, true);
+    sentry_init(options);
+    sentry_user_consent_revoke();
+
+    sentry_path_t *cache_path
+        = sentry__path_join_str(options->database_path, "cache");
+    TEST_ASSERT(!!cache_path);
+    sentry__path_remove_all(cache_path);
+
+    sentry_capture_event(
+        sentry_value_new_message_event(SENTRY_LEVEL_INFO, "test", "revoked"));
+
+    int count = 0;
+    bool is_retry_format = false;
+    sentry_pathiter_t *iter = sentry__path_iter_directory(cache_path);
+    const sentry_path_t *entry;
+    while (iter && (entry = sentry__pathiter_next(iter)) != NULL) {
+        if (sentry__path_ends_with(entry, ".envelope")) {
+            count++;
+            uint64_t ts;
+            int attempt;
+            const char *uuid;
+            is_retry_format = sentry__parse_cache_filename(
+                sentry__path_filename(entry), &ts, &attempt, &uuid);
+        }
+    }
+    sentry__pathiter_free(iter);
+    TEST_CHECK_INT_EQUAL(count, 1);
+    TEST_CHECK(is_retry_format);
+
+    sentry__path_free(cache_path);
+    sentry_close();
+}
+
+SENTRY_TEST(cache_consent_revoked_nocache)
+{
+#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_PS)
+    SKIP_TEST();
+#endif
+    SENTRY_TEST_OPTIONS_NEW(options);
+    sentry_options_set_dsn(options, "https://foo@sentry.invalid/42");
+    sentry_options_set_cache_keep(options, false);
+    sentry_options_set_require_user_consent(options, true);
+    sentry_init(options);
+    sentry_user_consent_revoke();
+
+    sentry_path_t *cache_path
+        = sentry__path_join_str(options->database_path, "cache");
+    TEST_ASSERT(!!cache_path);
+    sentry__path_remove_all(cache_path);
+
+    sentry_capture_event(
+        sentry_value_new_message_event(SENTRY_LEVEL_INFO, "test", "revoked"));
+
+    int count = 0;
+    sentry_pathiter_t *iter = sentry__path_iter_directory(cache_path);
+    const sentry_path_t *entry;
+    while (iter && (entry = sentry__pathiter_next(iter)) != NULL) {
+        if (sentry__path_ends_with(entry, ".envelope")) {
+            count++;
+        }
+    }
+    sentry__pathiter_free(iter);
+    TEST_CHECK_INT_EQUAL(count, 0);
 
     sentry__path_free(cache_path);
     sentry_close();

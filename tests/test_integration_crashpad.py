@@ -440,18 +440,18 @@ def test_crashpad_dumping_crash(cmake, httpserver, run_args, build_args):
 
 
 @pytest.mark.parametrize(
-    "build_args",
+    "stack_size",
     [
-        ({}),  # uses default of 64KiB
+        None,  # uses default of 64KiB
         pytest.param(
-            {"SENTRY_HANDLER_STACK_SIZE": "16"},
+            "16",
             marks=pytest.mark.skipif(
                 sys.platform != "win32",
                 reason="handler stack size parameterization tests stack guarantee on windows only",
             ),
         ),
         pytest.param(
-            {"SENTRY_HANDLER_STACK_SIZE": "32"},
+            "32",
             marks=pytest.mark.skipif(
                 sys.platform != "win32",
                 reason="handler stack size parameterization tests stack guarantee on windows only",
@@ -459,11 +459,12 @@ def test_crashpad_dumping_crash(cmake, httpserver, run_args, build_args):
         ),
     ],
 )
-def test_crashpad_dumping_stack_overflow(cmake, httpserver, build_args):
-    build_args.update({"SENTRY_BACKEND": "crashpad"})
-    tmp_path = cmake(["sentry_example"], build_args)
+def test_crashpad_dumping_stack_overflow(cmake, httpserver, stack_size):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "crashpad"})
 
     env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
+    if stack_size:
+        env["SENTRY_HANDLER_STACK_SIZE"] = stack_size
     httpserver.expect_oneshot_request("/api/123456/minidump/").respond_with_data("OK")
     httpserver.expect_request("/api/123456/envelope/").respond_with_data("OK")
 
@@ -649,7 +650,7 @@ def test_crashpad_logs_on_crash(cmake, httpserver):
         run(
             tmp_path,
             "sentry_example",
-            ["log", "enable-logs", "capture-log", "crash"],
+            ["log", "capture-log", "crash"],
             expect_failure=True,
             env=env,
         )
@@ -681,7 +682,7 @@ def test_crashpad_logs_and_session_on_crash(cmake, httpserver):
         run(
             tmp_path,
             "sentry_example",
-            ["log", "enable-logs", "capture-log", "crash", "start-session"],
+            ["log", "capture-log", "crash", "start-session"],
             expect_failure=True,
             env=env,
         )
@@ -865,12 +866,68 @@ def test_crashpad_cache_keep(cmake, httpserver, cache_keep):
         assert cache_files[0].stem == dmp_files[0].stem
 
 
+def test_crashpad_cache_consent(cmake, httpserver):
+    """Crash while consent is revoked + cache_keep: the minidump stays in
+    crashpad's pending queue (no upload, not moved to completed). Once
+    consent is given, RequestRetry() wakes the handler and the minidump
+    is uploaded."""
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "crashpad"})
+    db_path = tmp_path.joinpath(".sentry-native")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
+
+    # 1) Crash with consent revoked. No upload should happen.
+    run(
+        tmp_path,
+        "sentry_example",
+        [
+            "log",
+            "require-user-consent",
+            "user-consent-revoke",
+            "cache-keep",
+            "crash",
+        ],
+        expect_failure=True,
+        env=env,
+    )
+
+    # Give the (out-of-process) handler a moment to write the report.
+    time.sleep(1)
+    assert len(httpserver.log) == 0
+
+    # On Linux/macOS the database lays out pending/ and completed/ as
+    # separate directories; on Windows a single reports/ dir tracks state
+    # in metadata, so only assert the dir-based invariants off-Windows.
+    if sys.platform != "win32":
+        pending_dir = db_path.joinpath("pending")
+        completed_dir = db_path.joinpath("completed")
+        assert pending_dir.exists()
+        assert len(list(pending_dir.glob("*.dmp"))) >= 1
+        assert not completed_dir.exists() or not any(completed_dir.glob("*.dmp"))
+
+    # 2) Give consent. The handler should wake via RequestRetry() and upload.
+    httpserver.expect_oneshot_request("/api/123456/minidump/").respond_with_data("OK")
+    with httpserver.wait(timeout=10) as waiting:
+        run(
+            tmp_path,
+            "sentry_example",
+            [
+                "log",
+                "require-user-consent",
+                "user-consent-give",
+                "cache-keep",
+                "no-setup",
+            ],
+            env=env,
+        )
+    assert waiting.result
+
+
 def test_crashpad_cache_max_size(cmake, httpserver):
     tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "crashpad"})
     cache_dir = tmp_path.joinpath(".sentry-native/cache")
     env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
 
-    # 5 x 2mb
+    # 5 x 4mb
     for i in range(5):
         httpserver.expect_oneshot_request("/api/123456/minidump/").respond_with_data(
             "OK"
@@ -905,7 +962,7 @@ def test_crashpad_cache_max_size(cmake, httpserver):
         if cache_dir.exists():
             for f in cache_dir.glob("*.envelope"):
                 with open(f, "r+b") as file:
-                    file.truncate(2 * 1024 * 1024)
+                    file.truncate(4 * 1024 * 1024)
 
     run(
         tmp_path,
@@ -914,11 +971,11 @@ def test_crashpad_cache_max_size(cmake, httpserver):
         env=env,
     )
 
-    # max 4mb
+    # max 16mb
     assert cache_dir.exists()
     cache_files = list(cache_dir.glob("*.envelope"))
-    assert len(cache_files) <= 2
-    assert sum(f.stat().st_size for f in cache_files) <= 4 * 1024 * 1024
+    assert len(cache_files) <= 4
+    assert sum(f.stat().st_size for f in cache_files) <= 16 * 1024 * 1024
 
 
 def test_crashpad_cache_max_age(cmake, httpserver):

@@ -2,6 +2,7 @@
 
 #include "minidump/sentry_minidump_writer.h"
 #include "sentry_alloc.h"
+#include "sentry_attachment.h"
 #include "sentry_core.h"
 #include "sentry_crash_ipc.h"
 #include "sentry_database.h"
@@ -29,7 +30,6 @@
 #include <time.h>
 
 #if defined(SENTRY_PLATFORM_UNIX)
-#    include <arpa/inet.h>
 #    include <dirent.h>
 #    include <dlfcn.h>
 #    include <errno.h>
@@ -42,7 +42,9 @@
 #    include <sys/wait.h>
 #    include <unistd.h>
 #    if defined(SENTRY_PLATFORM_MACOS)
+#        include <crt_externs.h>
 #        include <mach-o/dyld.h>
+#        include <spawn.h>
 #    endif
 #elif defined(SENTRY_PLATFORM_WINDOWS)
 #    include <dbghelp.h>
@@ -191,6 +193,102 @@ write_attachment_to_envelope(int fd, const char *file_path,
     _close(attach_fd);
 #endif
     return true;
+}
+
+static bool
+attachment_is_placeholder(const sentry_options_t *options, const char *path)
+{
+    sentry_attachment_t attachment = { 0 };
+    attachment.path = sentry__path_from_str(path);
+    if (!attachment.path) {
+        return false;
+    }
+    attachment.type = ATTACHMENT;
+    bool is_placeholder
+        = sentry__attachment_is_placeholder(&attachment, options);
+    sentry__path_free(attachment.path);
+    return is_placeholder;
+}
+
+// For each large attachment listed in `<run_folder>/__sentry-attachments`,
+// cache it as an attachment-ref item. Small attachments were already inlined
+// during envelope writing.
+static void
+add_attachment_refs(sentry_envelope_t *envelope,
+    const sentry_options_t *options, const sentry_path_t *run_folder)
+{
+    if (!envelope || !options || !options->run
+        || !options->enable_large_attachments || !run_folder) {
+        return;
+    }
+    sentry_path_t *attach_list_path
+        = sentry__path_join_str(run_folder, "__sentry-attachments");
+    if (!attach_list_path) {
+        SENTRY_WARN("Failed to resolve attachment manifest path");
+        return;
+    }
+    size_t attach_json_len = 0;
+    char *attach_json
+        = sentry__path_read_to_buffer(attach_list_path, &attach_json_len);
+    sentry__path_free(attach_list_path);
+    if (!attach_json) {
+        return;
+    }
+    sentry_value_t list = attach_json_len > 0
+        ? sentry__value_from_json(attach_json, attach_json_len)
+        : sentry_value_new_null();
+    sentry_free(attach_json);
+    if (sentry_value_is_null(list)) {
+        SENTRY_WARN("Failed to parse attachment manifest");
+        return;
+    }
+
+    bool materialized = false;
+    size_t len = sentry_value_get_length(list);
+    for (size_t i = 0; i < len; i++) {
+        sentry_value_t info = sentry_value_get_by_index(list, i);
+        const char *path
+            = sentry_value_as_string(sentry_value_get_by_key(info, "path"));
+        const char *filename
+            = sentry_value_as_string(sentry_value_get_by_key(info, "filename"));
+        const char *content_type = sentry_value_as_string(
+            sentry_value_get_by_key(info, "content_type"));
+        if (!path || !*path || !filename || !*filename) {
+            SENTRY_WARN("Skipping malformed attachment manifest entry");
+            continue;
+        }
+        sentry_attachment_t attachment = { 0 };
+        attachment.path = sentry__path_from_str(path);
+        attachment.filename = sentry__path_from_str(filename);
+        if (!attachment.path || !attachment.filename) {
+            SENTRY_WARNF("Failed to allocate attachment paths for: %s", path);
+            sentry__path_free(attachment.path);
+            sentry__path_free(attachment.filename);
+            continue;
+        }
+        attachment.type = ATTACHMENT;
+        attachment.content_type
+            = (char *)((content_type && *content_type) ? content_type : NULL);
+        if (!sentry__attachment_is_placeholder(&attachment, options)) {
+            sentry__path_free(attachment.path);
+            sentry__path_free(attachment.filename);
+            continue;
+        }
+        if (!materialized && !sentry__envelope_materialize(envelope)) {
+            SENTRY_WARN("Failed to materialize envelope for attachment-refs");
+            sentry__path_free(attachment.path);
+            sentry__path_free(attachment.filename);
+            break;
+        }
+        materialized = true;
+        if (!sentry__cache_attachment_ref(
+                envelope, &attachment, options->run->cache_path, NULL)) {
+            SENTRY_WARN("failed to cache attachment-ref");
+        }
+        sentry__path_free(attachment.path);
+        sentry__path_free(attachment.filename);
+    }
+    sentry_value_decref(list);
 }
 
 #if defined(SENTRY_PLATFORM_UNIX)
@@ -1169,13 +1267,7 @@ capture_modules_from_proc_maps(sentry_crash_context_t *ctx)
             mod->name, mod->uuid, sizeof(mod->uuid));
 
         // Convert to little-endian GUID format for Sentry debug_id
-        // (same byte swapping as sentry_modulefinder_linux.c)
-        uint32_t *a = (uint32_t *)mod->uuid;
-        *a = htonl(*a);
-        uint16_t *b = (uint16_t *)(mod->uuid + 4);
-        *b = htons(*b);
-        uint16_t *c = (uint16_t *)(mod->uuid + 6);
-        *c = htons(*c);
+        sentry__uuid_swap_guid_bytes(mod->uuid);
 
         SENTRY_DEBUGF("Captured module: %s base=0x%llx size=0x%llx", mod->name,
             (unsigned long long)mod->base_address,
@@ -1715,10 +1807,19 @@ get_thread_name(HANDLE hThread, sentry_thread_context_windows_t *tctx)
 /**
  * Enumerate threads from the crashed process for the native event on Windows
  * Captures thread contexts for stack walking.
+ *
+ * Not available on Xbox (the ToolHelp32 API is not part of the gaming
+ * partition). MiniDumpWriteDump still captures all thread contexts from the
+ * target process independently, so skipping this only loses supplementary
+ * per-thread metadata from the Sentry event payload.
  */
 static void
 enumerate_threads_from_process(sentry_crash_context_t *ctx)
 {
+#    if defined(SENTRY_PLATFORM_XBOX)
+    (void)ctx;
+    return;
+#    else
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (hSnapshot == INVALID_HANDLE_VALUE) {
         SENTRY_WARN("CreateToolhelp32Snapshot failed");
@@ -1815,6 +1916,7 @@ enumerate_threads_from_process(sentry_crash_context_t *ctx)
     ctx->platform.num_threads = thread_count;
     SENTRY_DEBUGF("Enumerated %u threads from process %d", thread_count,
         ctx->crashed_pid);
+#    endif // SENTRY_PLATFORM_XBOX
 }
 #endif // SENTRY_PLATFORM_WINDOWS
 
@@ -2090,9 +2192,8 @@ build_native_crash_event(
             sentry_value_set_by_key(
                 image, "image_addr", sentry_value_new_string(addr_buf));
 
-            // Set image_size as int32 (modules > 2GB are extremely rare)
             sentry_value_set_by_key(image, "image_size",
-                sentry_value_new_int32((int32_t)mod->size));
+                sentry_value_new_int64((int64_t)mod->size));
 
 #if defined(SENTRY_PLATFORM_WINDOWS)
             // Set code_id for PE modules (TimeDateStamp + SizeOfImage)
@@ -2380,7 +2481,8 @@ write_envelope_with_native_stacktrace(const sentry_options_t *options,
                         const char *content_type
                             = sentry_value_as_string(content_type_val);
 
-                        if (path && filename) {
+                        if (path && filename
+                            && !attachment_is_placeholder(options, path)) {
                             write_attachment_to_envelope(
                                 fd, path, filename, content_type);
                         }
@@ -2392,7 +2494,7 @@ write_envelope_with_native_stacktrace(const sentry_options_t *options,
     }
 
     // Add screenshot attachment if captured by the daemon
-    if (options && options->attach_screenshot && run_folder) {
+    if (ctx->attach_screenshot && run_folder) {
         sentry_path_t *screenshot_path
             = sentry__path_join_str(run_folder, "screenshot.png");
         if (screenshot_path) {
@@ -2417,8 +2519,9 @@ write_envelope_with_native_stacktrace(const sentry_options_t *options,
  */
 static bool
 write_envelope_with_minidump(const sentry_options_t *options,
-    const char *envelope_path, const char *event_msgpack_path,
-    const char *minidump_path, sentry_path_t *run_folder)
+    const sentry_crash_context_t *ctx, const char *envelope_path,
+    const char *event_msgpack_path, const char *minidump_path,
+    sentry_path_t *run_folder)
 {
     // Read event JSON data
     size_t event_size = 0;
@@ -2614,7 +2717,8 @@ write_envelope_with_minidump(const sentry_options_t *options,
                         const char *content_type
                             = sentry_value_as_string(content_type_val);
 
-                        if (path && filename) {
+                        if (path && filename
+                            && !attachment_is_placeholder(options, path)) {
                             write_attachment_to_envelope(
                                 fd, path, filename, content_type);
                         }
@@ -2626,7 +2730,7 @@ write_envelope_with_minidump(const sentry_options_t *options,
     }
 
     // Add screenshot attachment if captured by the daemon
-    if (options && options->attach_screenshot && run_folder) {
+    if (ctx->attach_screenshot && run_folder) {
         sentry_path_t *screenshot_path
             = sentry__path_join_str(run_folder, "screenshot.png");
         if (screenshot_path) {
@@ -2802,7 +2906,7 @@ sentry__process_crash(const sentry_options_t *options, sentry_crash_ipc_t *ipc)
     // This is done in the daemon process (out-of-process) because
     // screenshot capture is NOT signal-safe (uses LoadLibrary, GDI+, etc.)
 #if defined(SENTRY_PLATFORM_WINDOWS)
-    if (options && options->attach_screenshot && run_folder) {
+    if (ctx->attach_screenshot && run_folder) {
         SENTRY_DEBUG("Capturing screenshot");
         sentry_path_t *screenshot_path
             = sentry__path_join_str(run_folder, "screenshot.png");
@@ -2867,7 +2971,7 @@ sentry__process_crash(const sentry_options_t *options, sentry_crash_ipc_t *ipc)
         // Mode 0 (MINIDUMP only)
         SENTRY_DEBUG("Writing envelope with minidump");
         envelope_written = write_envelope_with_minidump(
-            options, envelope_path, event_path, minidump_path, run_folder);
+            options, ctx, envelope_path, event_path, minidump_path, run_folder);
     }
 
     if (!envelope_written) {
@@ -2906,6 +3010,11 @@ sentry__process_crash(const sentry_options_t *options, sentry_crash_ipc_t *ipc)
     }
 #endif
 
+    if (options->run) {
+        sentry__atomic_store(&options->run->user_consent,
+            sentry__atomic_fetch(&ctx->user_consent));
+    }
+
     sentry_path_t *env_path = sentry__path_from_str(envelope_path);
     if (!env_path) {
         SENTRY_WARN("Failed to create envelope path");
@@ -2920,15 +3029,25 @@ sentry__process_crash(const sentry_options_t *options, sentry_crash_ipc_t *ipc)
         goto cleanup;
     }
 
-    SENTRY_DEBUG("Envelope loaded, sending via transport");
+    add_attachment_refs(envelope, options, run_folder);
 
-    // Send directly via transport, or to external crash reporter
+    bool has_attachment_refs = sentry__envelope_has_content_type(
+        envelope, SENTRY_ATTACHMENT_REF_MIME);
+
+    SENTRY_DEBUG("Envelope loaded, capturing");
+
+    // Capture directly, or pass to external crash reporter
     if (!sentry__launch_external_crash_reporter(options, envelope)) {
-        // Send directly via transport
-        if (options && options->transport) {
-            SENTRY_DEBUG("Calling transport send_envelope");
-            sentry__transport_send_envelope(options->transport, envelope);
-            SENTRY_DEBUG("Crash envelope sent to transport (queued)");
+        if (has_attachment_refs && options && options->run) {
+            if (!sentry__run_write_envelope(options->run, envelope)) {
+                SENTRY_WARN(
+                    "Failed to dump crash envelope for resend on restart");
+            }
+        }
+        if (options && options->transport && options->run) {
+            SENTRY_DEBUG("Capturing crash envelope");
+            sentry__capture_envelope(options->transport, envelope, options);
+            SENTRY_DEBUG("Crash envelope captured (queued)");
         } else {
             SENTRY_WARN("No transport available for sending envelope");
             sentry_envelope_free(envelope);
@@ -2949,7 +3068,7 @@ sentry__process_crash(const sentry_options_t *options, sentry_crash_ipc_t *ipc)
 
 cleanup:
     // Send all other envelopes from run folder (logs, etc.) before cleanup
-    if (run_folder && options && options->transport) {
+    if (run_folder && options && options->transport && options->run) {
         SENTRY_DEBUG("Checking for additional envelopes in run folder");
         sentry_pathiter_t *piter = sentry__path_iter_directory(run_folder);
         if (piter) {
@@ -2966,8 +3085,8 @@ cleanup:
                     sentry_envelope_t *run_envelope
                         = sentry__envelope_from_path(file_path);
                     if (run_envelope) {
-                        sentry__transport_send_envelope(
-                            options->transport, run_envelope);
+                        sentry__capture_envelope(
+                            options->transport, run_envelope, options);
                         envelope_count++;
                     } else {
                         SENTRY_WARNF("Failed to load envelope: %s", path_str);
@@ -3001,9 +3120,6 @@ cleanup:
     SENTRY_DEBUG("Crash processing completed successfully");
 
 done:
-    // Mark as done
-    SENTRY_DEBUG("Marking crash state as DONE");
-    sentry__atomic_store(&ctx->state, SENTRY_CRASH_STATE_DONE);
     SENTRY_DEBUG("Processing crash - END");
     SENTRY_DEBUG("Crash processing complete");
 }
@@ -3061,8 +3177,8 @@ sentry__crash_daemon_main(
     pid_t app_pid, uint64_t app_tid, int notify_eventfd, int ready_eventfd)
 #elif defined(SENTRY_PLATFORM_MACOS)
 int
-sentry__crash_daemon_main(
-    pid_t app_pid, uint64_t app_tid, int notify_pipe_read, int ready_pipe_write)
+sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, int notify_pipe_read,
+    int ready_pipe_write, int shm_fd)
 #elif defined(SENTRY_PLATFORM_WINDOWS)
 int
 sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
@@ -3076,7 +3192,7 @@ sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
         app_pid, app_tid, notify_eventfd, ready_eventfd);
 #elif defined(SENTRY_PLATFORM_MACOS)
     sentry_crash_ipc_t *ipc = sentry__crash_ipc_init_daemon(
-        app_pid, app_tid, notify_pipe_read, ready_pipe_write);
+        app_pid, app_tid, notify_pipe_read, ready_pipe_write, shm_fd);
 #elif defined(SENTRY_PLATFORM_WINDOWS)
     sentry_crash_ipc_t *ipc = sentry__crash_ipc_init_daemon(
         app_pid, app_tid, event_handle, ready_event_handle);
@@ -3174,7 +3290,9 @@ sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
     sentry_options_set_debug(options, ipc->shmem->debug_enabled);
     options->attach_screenshot = ipc->shmem->attach_screenshot;
     options->cache_keep = ipc->shmem->cache_keep;
+    options->enable_large_attachments = ipc->shmem->enable_large_attachments;
     options->http_retry = false;
+    options->shutdown_timeout = ipc->shmem->shutdown_timeout;
 
     // Set custom logger that writes to file
     if (log_file) {
@@ -3211,6 +3329,10 @@ sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
     sentry_path_t *db_path = sentry__path_from_str(ipc->shmem->database_path);
     if (db_path) {
         options->run = sentry__run_new(db_path);
+        if (options->run) {
+            options->run->require_user_consent
+                = ipc->shmem->require_user_consent;
+        }
         sentry__path_free(db_path);
     }
 
@@ -3303,13 +3425,30 @@ sentry__crash_daemon_main(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
 
     // Cleanup
     if (options) {
+        size_t dumped_envelopes = 0;
         if (options->transport) {
-            // Wait up to 10 seconds for transport to send pending envelopes
-            // (crash envelope + logs envelope, etc.)
-            sentry__transport_shutdown(
-                options->transport, SENTRY_CRASH_TRANSPORT_SHUTDOWN_TIMEOUT_MS);
+            // Wait for the configured SDK shutdown timeout to send pending
+            // envelopes (crash envelope + logs envelope, etc.).
+            int rv = sentry__transport_shutdown(
+                options->transport, options->shutdown_timeout);
+            if (rv != 0) {
+                SENTRY_WARN("transport did not shut down cleanly");
+            }
+            dumped_envelopes = sentry__transport_dump_queue(
+                options->transport, options->run);
+            if (rv == 0 && !dumped_envelopes && options->run) {
+                sentry__run_clean(options->run, true);
+            }
         }
         sentry_options_free(options);
+    }
+    if (crash_processed) {
+        // Mark as done
+        SENTRY_DEBUG("Marking crash state as DONE");
+        sentry__atomic_store(&ipc->shmem->state, SENTRY_CRASH_STATE_DONE);
+    }
+    if (crash_processed || !is_parent_alive(ipc->parent_handle)) {
+        sentry__crash_ipc_unlink(ipc);
     }
     sentry__crash_ipc_free(ipc);
 
@@ -3328,21 +3467,105 @@ sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid, int notify_eventfd,
 #elif defined(SENTRY_PLATFORM_MACOS)
 pid_t
 sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid,
-    int notify_pipe_read, int ready_pipe_write, const char *handler_path)
+    int notify_pipe_read, int ready_pipe_write, int shm_fd,
+    const char *handler_path)
 #elif defined(SENTRY_PLATFORM_WINDOWS)
 pid_t
 sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
     HANDLE ready_event_handle, const char *handler_path)
 #endif
 {
-#if defined(SENTRY_PLATFORM_UNIX)
-    // Fork and exec sentry-crash executable
-    // Using exec (not just fork) avoids inheriting sanitizer state and is
-    // cleaner
+#if defined(SENTRY_PLATFORM_MACOS)
+    // macOS: Use posix_spawn instead of fork+exec for App Sandbox
+    // compatibility. posix_spawn is Apple's recommended API and works correctly
+    // in sandboxed processes, unlike fork() which can have issues with sandbox
+    // inheritance.
+
+    // Resolve daemon path
+    char daemon_path[SENTRY_CRASH_MAX_PATH];
+    if (handler_path && handler_path[0] != '\0') {
+        strncpy(daemon_path, handler_path, sizeof(daemon_path) - 1);
+        daemon_path[sizeof(daemon_path) - 1] = '\0';
+    } else {
+        char exe_path[SENTRY_CRASH_MAX_PATH];
+        uint32_t exe_size = sizeof(exe_path);
+        if (_NSGetExecutablePath(exe_path, &exe_size) != 0) {
+            SENTRY_WARN("Failed to get executable path for daemon");
+            return -1;
+        }
+        const char *slash = strrchr(exe_path, '/');
+        if (!slash
+            || (size_t)(slash - exe_path + 1) + strlen("sentry-crash")
+                >= sizeof(daemon_path)) {
+            SENTRY_WARN("Daemon path too long");
+            return -1;
+        }
+        size_t dir_len = (size_t)(slash - exe_path + 1);
+        memcpy(daemon_path, exe_path, dir_len);
+        strcpy(daemon_path + dir_len, "sentry-crash");
+    }
+
+    // Build argument strings (6 args: pid, tid, notify_fd, ready_fd, shm_fd)
+    char pid_str[32], tid_str[32], notify_str[32], ready_str[32], shm_str[32];
+    snprintf(pid_str, sizeof(pid_str), "%d", (int)app_pid);
+    snprintf(tid_str, sizeof(tid_str), "%" PRIx64, app_tid);
+    snprintf(notify_str, sizeof(notify_str), "%d", notify_pipe_read);
+    snprintf(ready_str, sizeof(ready_str), "%d", ready_pipe_write);
+    snprintf(shm_str, sizeof(shm_str), "%d", shm_fd);
+
+    char *spawn_argv[] = { "sentry-crash", pid_str, tid_str, notify_str,
+        ready_str, shm_str, NULL };
+
+    // Set up posix_spawn attributes
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    // POSIX_SPAWN_SETSID: create new session (like setsid() after fork)
+    // POSIX_SPAWN_CLOEXEC_DEFAULT: close all fds except explicitly inherited
+    short spawn_flags = POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT;
+    posix_spawnattr_setflags(&attr, spawn_flags);
+
+    // Explicitly inherit only the fds the daemon needs
+    posix_spawn_file_actions_t file_actions;
+    posix_spawn_file_actions_init(&file_actions);
+    posix_spawn_file_actions_addinherit_np(&file_actions, notify_pipe_read);
+    posix_spawn_file_actions_addinherit_np(&file_actions, ready_pipe_write);
+    posix_spawn_file_actions_addinherit_np(&file_actions, shm_fd);
+    // Open /dev/null on stdin/stdout/stderr so the daemon starts with valid
+    // standard fds. Without this, POSIX_SPAWN_CLOEXEC_DEFAULT closes them,
+    // and the first fopen() in the daemon would get fd 0, which the daemon's
+    // own close(STDIN_FILENO) would then destroy.
+    // Skip if an IPC fd occupies that slot (e.g. caller closed stdin before
+    // sentry_init), to avoid clobbering it with /dev/null.
+    int std_fds[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
+    int std_modes[3] = { O_RDONLY, O_WRONLY, O_WRONLY };
+    for (int i = 0; i < 3; i++) {
+        if (std_fds[i] != notify_pipe_read && std_fds[i] != ready_pipe_write
+            && std_fds[i] != shm_fd) {
+            posix_spawn_file_actions_addopen(
+                &file_actions, std_fds[i], "/dev/null", std_modes[i], 0);
+        }
+    }
+
+    pid_t daemon_pid;
+    int spawn_result = posix_spawn(&daemon_pid, daemon_path, &file_actions,
+        &attr, spawn_argv, *_NSGetEnviron());
+
+    posix_spawn_file_actions_destroy(&file_actions);
+    posix_spawnattr_destroy(&attr);
+
+    if (spawn_result != 0) {
+        SENTRY_WARNF("posix_spawn failed for %s: %s", daemon_path,
+            strerror(spawn_result));
+        return -1;
+    }
+
+    return daemon_pid;
+
+#elif defined(SENTRY_PLATFORM_LINUX) || defined(SENTRY_PLATFORM_ANDROID)
+    // Linux: Use fork+exec
     pid_t daemon_pid = fork();
 
     if (daemon_pid < 0) {
-        // Fork failed
         SENTRY_WARN("Failed to fork daemon process");
         return -1;
     } else if (daemon_pid == 0) {
@@ -3350,7 +3573,6 @@ sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
         setsid();
 
         // Clear FD_CLOEXEC on notify and ready fds so they survive exec
-#    if defined(SENTRY_PLATFORM_LINUX) || defined(SENTRY_PLATFORM_ANDROID)
         int notify_flags = fcntl(notify_eventfd, F_GETFD);
         if (notify_flags != -1) {
             fcntl(notify_eventfd, F_SETFD, notify_flags & ~FD_CLOEXEC);
@@ -3359,73 +3581,38 @@ sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
         if (ready_flags != -1) {
             fcntl(ready_eventfd, F_SETFD, ready_flags & ~FD_CLOEXEC);
         }
-#    elif defined(SENTRY_PLATFORM_MACOS)
-        int notify_flags = fcntl(notify_pipe_read, F_GETFD);
-        if (notify_flags != -1) {
-            fcntl(notify_pipe_read, F_SETFD, notify_flags & ~FD_CLOEXEC);
-        }
-        int ready_flags = fcntl(ready_pipe_write, F_GETFD);
-        if (ready_flags != -1) {
-            fcntl(ready_pipe_write, F_SETFD, ready_flags & ~FD_CLOEXEC);
-        }
-#    endif
 
         // Convert arguments to strings for exec
         char pid_str[32], tid_str[32], notify_str[32], ready_str[32];
         snprintf(pid_str, sizeof(pid_str), "%d", (int)app_pid);
         snprintf(tid_str, sizeof(tid_str), "%" PRIx64, app_tid);
-#    if defined(SENTRY_PLATFORM_LINUX) || defined(SENTRY_PLATFORM_ANDROID)
         snprintf(notify_str, sizeof(notify_str), "%d", notify_eventfd);
         snprintf(ready_str, sizeof(ready_str), "%d", ready_eventfd);
-#    elif defined(SENTRY_PLATFORM_MACOS)
-        snprintf(notify_str, sizeof(notify_str), "%d", notify_pipe_read);
-        snprintf(ready_str, sizeof(ready_str), "%d", ready_pipe_write);
-#    endif
 
         char *argv[]
             = { "sentry-crash", pid_str, tid_str, notify_str, ready_str, NULL };
 
-        // If handler_path was explicitly set via options, use it directly.
-        // Otherwise, look for sentry-crash next to the current executable
-        // (matching crashpad's behavior). No fallback chain — fail hard so
-        // configuration issues are visible.
         if (handler_path && handler_path[0] != '\0') {
             execv(handler_path, argv);
         } else {
             char exe_path[SENTRY_CRASH_MAX_PATH];
-            char daemon_path[SENTRY_CRASH_MAX_PATH];
+            char daemon_exec_path[SENTRY_CRASH_MAX_PATH];
 
-#    if defined(SENTRY_PLATFORM_LINUX) || defined(SENTRY_PLATFORM_ANDROID)
             ssize_t exe_len
                 = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
             if (exe_len > 0) {
                 exe_path[exe_len] = '\0';
                 const char *slash = strrchr(exe_path, '/');
                 if (slash) {
-                    size_t dir_len = slash - exe_path + 1;
+                    size_t dir_len = (size_t)(slash - exe_path + 1);
                     if (dir_len + strlen("sentry-crash")
-                        < sizeof(daemon_path)) {
-                        memcpy(daemon_path, exe_path, dir_len);
-                        strcpy(daemon_path + dir_len, "sentry-crash");
-                        execv(daemon_path, argv);
+                        < sizeof(daemon_exec_path)) {
+                        memcpy(daemon_exec_path, exe_path, dir_len);
+                        strcpy(daemon_exec_path + dir_len, "sentry-crash");
+                        execv(daemon_exec_path, argv);
                     }
                 }
             }
-#    elif defined(SENTRY_PLATFORM_MACOS)
-            uint32_t exe_size = sizeof(exe_path);
-            if (_NSGetExecutablePath(exe_path, &exe_size) == 0) {
-                const char *slash = strrchr(exe_path, '/');
-                if (slash) {
-                    size_t dir_len = slash - exe_path + 1;
-                    if (dir_len + strlen("sentry-crash")
-                        < sizeof(daemon_path)) {
-                        memcpy(daemon_path, exe_path, dir_len);
-                        strcpy(daemon_path + dir_len, "sentry-crash");
-                        execv(daemon_path, argv);
-                    }
-                }
-            }
-#    endif
         }
 
         // exec failed - exit with error
@@ -3549,16 +3736,44 @@ sentry__crash_daemon_start(pid_t app_pid, uint64_t app_tid, HANDLE event_handle,
 // When built as standalone executable, provide main entry point
 #ifdef SENTRY_CRASH_DAEMON_STANDALONE
 
+#    if defined(SENTRY_PLATFORM_XBOX)
+// Thin wrappers provided by sentry-xbox; the daemon doesn't link XGameRuntime
+// directly so these indirections keep all Xbox-platform coupling on that side.
+extern bool sentry__xbox_game_runtime_initialize(void);
+extern void sentry__xbox_game_runtime_uninitialize(void);
+
+extern bool sentry__xbox_ensure_network_initialized(void);
+
+static DWORD WINAPI
+sentry__xbox_network_prewarm_thread_proc(LPVOID param)
+{
+    (void)param;
+    (void)sentry__xbox_ensure_network_initialized();
+    return 0;
+}
+#    endif
+
 int
 main(int argc, char **argv)
 {
-    // Expected arguments: <app_pid> <app_tid> <notify_handle> <ready_handle>
+    // Expected arguments:
+    //   Linux:  <app_pid> <app_tid> <notify_handle> <ready_handle>
+    //   macOS:  <app_pid> <app_tid> <notify_handle> <ready_handle> <shm_fd>
+#    if defined(SENTRY_PLATFORM_MACOS)
+    if (argc < 6) {
+        fprintf(stderr,
+            "Usage: sentry-crash <app_pid> <app_tid> <notify_pipe> "
+            "<ready_pipe> <shm_fd>\n");
+        return 1;
+    }
+#    else
     if (argc < 5) {
         fprintf(stderr,
             "Usage: sentry-crash <app_pid> <app_tid> <notify_handle> "
             "<ready_handle>\n");
         return 1;
     }
+#    endif
 
     // Parse arguments
     pid_t app_pid = (pid_t)strtoul(argv[1], NULL, 10);
@@ -3572,15 +3787,38 @@ main(int argc, char **argv)
 #    elif defined(SENTRY_PLATFORM_MACOS)
     int notify_pipe_read = atoi(argv[3]);
     int ready_pipe_write = atoi(argv[4]);
+    int shm_fd_arg = atoi(argv[5]);
     return sentry__crash_daemon_main(
-        app_pid, app_tid, notify_pipe_read, ready_pipe_write);
+        app_pid, app_tid, notify_pipe_read, ready_pipe_write, shm_fd_arg);
 #    elif defined(SENTRY_PLATFORM_WINDOWS)
     unsigned long long event_handle_val = strtoull(argv[3], NULL, 10);
     unsigned long long ready_event_val = strtoull(argv[4], NULL, 10);
     HANDLE event_handle = (HANDLE)(uintptr_t)event_handle_val;
     HANDLE ready_event_handle = (HANDLE)(uintptr_t)ready_event_val;
-    return sentry__crash_daemon_main(
+
+#        if defined(SENTRY_PLATFORM_XBOX)
+    // Required before any XNetworking call the transport makes at
+    // crash-upload time.
+    if (!sentry__xbox_game_runtime_initialize()) {
+        return 1;
+    }
+
+    HANDLE network_prewarm_thread = CreateThread(
+        NULL, 0, sentry__xbox_network_prewarm_thread_proc, NULL, 0, NULL);
+#        endif
+
+    int rv = sentry__crash_daemon_main(
         app_pid, app_tid, event_handle, ready_event_handle);
+
+#        if defined(SENTRY_PLATFORM_XBOX)
+    if (network_prewarm_thread) {
+        WaitForSingleObject(network_prewarm_thread, INFINITE);
+        CloseHandle(network_prewarm_thread);
+    }
+
+    sentry__xbox_game_runtime_uninitialize();
+#        endif
+    return rv;
 #    else
     fprintf(stderr, "Platform not supported\n");
     return 1;

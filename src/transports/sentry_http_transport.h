@@ -2,6 +2,7 @@
 #define SENTRY_HTTP_TRANSPORT_H_INCLUDED
 
 #include "sentry_boot.h"
+#include "sentry_path.h"
 #include "sentry_ratelimiter.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
@@ -19,11 +20,17 @@ typedef struct sentry_prepared_http_request_s {
     char *body;
     size_t body_len;
     bool body_owned;
+    sentry_path_t *body_path;
 } sentry_prepared_http_request_t;
 
 sentry_prepared_http_request_t *sentry__prepare_http_request(
     sentry_envelope_t *envelope, const sentry_dsn_t *dsn,
     const sentry_rate_limiter_t *rl, const char *user_agent);
+sentry_prepared_http_request_t *sentry__prepare_tus_create_request(
+    size_t file_size, const sentry_dsn_t *dsn, const char *user_agent);
+sentry_prepared_http_request_t *sentry__prepare_tus_upload_request(
+    const char *location, const sentry_path_t *path, size_t file_size,
+    const sentry_dsn_t *dsn, const char *user_agent);
 
 void sentry__prepared_http_request_free(sentry_prepared_http_request_t *req);
 
@@ -31,6 +38,8 @@ typedef struct {
     int status_code;
     char *retry_after;
     char *x_sentry_rate_limits;
+    char *location;
+    bool shutdown;
 } sentry_http_response_t;
 
 typedef bool (*sentry_http_send_func_t)(void *client,

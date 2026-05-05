@@ -3,7 +3,7 @@ import time
 import pytest
 
 from . import run
-from .conditions import has_breakpad, has_files, has_http
+from .conditions import has_breakpad, has_files, has_http, is_qemu
 
 pytestmark = [
     pytest.mark.skipif(not has_files, reason="tests need local filesystem"),
@@ -19,7 +19,7 @@ pytestmark = [
         pytest.param(
             "breakpad",
             marks=pytest.mark.skipif(
-                not has_breakpad, reason="breakpad backend not available"
+                not has_breakpad or is_qemu, reason="breakpad backend not available"
             ),
         ),
     ],
@@ -67,7 +67,7 @@ def test_cache_keep(cmake, backend, cache_keep, unreachable_dsn):
         pytest.param(
             "breakpad",
             marks=pytest.mark.skipif(
-                not has_breakpad, reason="breakpad backend not available"
+                not has_breakpad or is_qemu, reason="breakpad backend not available"
             ),
         ),
     ],
@@ -94,14 +94,14 @@ def test_cache_max_size(cmake, backend, unreachable_dsn):
         env=env,
     )
 
-    # 5 x 2mb
+    # 5 x 4mb
     assert cache_dir.exists()
     cache_files = list(cache_dir.glob("*.envelope"))
     for f in cache_files:
         with open(f, "r+b") as file:
-            file.truncate(2 * 1024 * 1024)
+            file.truncate(4 * 1024 * 1024)
 
-    # max 4mb
+    # max 16mb
     run(
         tmp_path,
         "sentry_example",
@@ -110,8 +110,8 @@ def test_cache_max_size(cmake, backend, unreachable_dsn):
     )
 
     cache_files = list(cache_dir.glob("*.envelope"))
-    assert len(cache_files) <= 2
-    assert sum(f.stat().st_size for f in cache_files) <= 4 * 1024 * 1024
+    assert len(cache_files) <= 4
+    assert sum(f.stat().st_size for f in cache_files) <= 16 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
@@ -121,7 +121,7 @@ def test_cache_max_size(cmake, backend, unreachable_dsn):
         pytest.param(
             "breakpad",
             marks=pytest.mark.skipif(
-                not has_breakpad, reason="breakpad backend not available"
+                not has_breakpad or is_qemu, reason="breakpad backend not available"
             ),
         ),
     ],
@@ -176,7 +176,7 @@ def test_cache_max_age(cmake, backend, unreachable_dsn):
         pytest.param(
             "breakpad",
             marks=pytest.mark.skipif(
-                not has_breakpad, reason="breakpad backend not available"
+                not has_breakpad or is_qemu, reason="breakpad backend not available"
             ),
         ),
     ],
@@ -216,7 +216,7 @@ def test_cache_max_items(cmake, backend, unreachable_dsn):
         pytest.param(
             "breakpad",
             marks=pytest.mark.skipif(
-                not has_breakpad, reason="breakpad backend not available"
+                not has_breakpad or is_qemu, reason="breakpad backend not available"
             ),
         ),
     ],
@@ -231,7 +231,7 @@ def test_cache_max_items_with_retry(cmake, backend, unreachable_dsn):
         run(
             tmp_path,
             "sentry_example",
-            ["log", "cache-keep", "crash"],
+            ["log", "cache-keep", "flush", "crash"],
             expect_failure=True,
             env=env,
         )
@@ -263,3 +263,78 @@ def test_cache_max_items_with_retry(cmake, backend, unreachable_dsn):
     assert cache_dir.exists()
     cache_files = list(cache_dir.glob("*.envelope"))
     assert len(cache_files) <= 5
+
+
+def test_cache_consent_revoke(cmake, unreachable_dsn):
+    """With consent revoked and cache_keep, envelopes are cached to disk."""
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+    cache_dir = tmp_path.joinpath(".sentry-native/cache")
+    env = dict(os.environ, SENTRY_DSN=unreachable_dsn)
+
+    run(
+        tmp_path,
+        "sentry_example",
+        [
+            "log",
+            "cache-keep",
+            "require-user-consent",
+            "user-consent-revoke",
+            "capture-event",
+            "flush",
+        ],
+        env=env,
+    )
+
+    assert cache_dir.exists()
+    cache_files = list(cache_dir.glob("*.envelope"))
+    assert len(cache_files) == 1
+
+
+def test_cache_consent_discard(cmake, unreachable_dsn):
+    """With consent revoked but no cache_keep, envelopes are discarded."""
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+    cache_dir = tmp_path.joinpath(".sentry-native/cache")
+    env = dict(os.environ, SENTRY_DSN=unreachable_dsn)
+
+    run(
+        tmp_path,
+        "sentry_example",
+        [
+            "log",
+            "require-user-consent",
+            "user-consent-revoke",
+            "capture-event",
+            "flush",
+        ],
+        env=env,
+    )
+
+    assert not cache_dir.exists() or len(list(cache_dir.glob("*.envelope"))) == 0
+
+
+def test_cache_consent_flush(cmake, httpserver):
+    """Giving consent after capturing flushes cached envelopes immediately."""
+    from . import make_dsn
+
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "none"})
+    cache_dir = tmp_path.joinpath(".sentry-native/cache")
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
+
+    httpserver.expect_request("/api/123456/envelope/").respond_with_data("OK")
+
+    run(
+        tmp_path,
+        "sentry_example",
+        [
+            "log",
+            "http-retry",
+            "require-user-consent",
+            "user-consent-revoke",
+            "capture-event",
+            "user-consent-give",
+        ],
+        env=env,
+    )
+
+    assert len(httpserver.log) >= 1
+    assert not cache_dir.exists() or len(list(cache_dir.glob("*.envelope"))) == 0

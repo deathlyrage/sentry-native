@@ -1,6 +1,7 @@
 #include "sentry_boot.h"
 #include "sentry_symbolizer.h"
 #include "sentry_testsupport.h"
+#include <stdlib.h>
 
 #ifdef SENTRY_WITH_UNWINDER_LIBUNWIND
 #    include "unwinder/sentry_unwinder.h"
@@ -55,8 +56,13 @@ find_frame(const sentry_frame_info_t *info, void *data)
 
 SENTRY_TEST(unwinder)
 {
-#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_XBOX)
+#if defined(SENTRY_PLATFORM_NX) || defined(SENTRY_PLATFORM_XBOX)               \
+    || defined(SENTRY_PLATFORM_PS)
     SKIP_TEST();
+#else
+    if (getenv("TEST_QEMU")) {
+        SKIP_TEST();
+    }
 #endif
 
     void *backtrace1[MAX_FRAMES] = { 0 };

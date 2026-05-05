@@ -548,6 +548,12 @@ main(int argc, char **argv)
 
     sentry_options_set_auto_session_tracking(options, false);
     sentry_options_set_symbolize_stacktraces(options, true);
+    const char *shutdown_timeout
+        = get_arg_value(argc, argv, "shutdown-timeout");
+    if (shutdown_timeout) {
+        sentry_options_set_shutdown_timeout(
+            options, strtoull(shutdown_timeout, NULL, 10));
+    }
 
     sentry_options_set_environment(options, "development");
     // sentry defaults this to the `SENTRY_RELEASE` env variable
@@ -563,6 +569,26 @@ main(int argc, char **argv)
         // assuming the example / test is run directly from the cmake build
         // directory
         sentry_options_add_attachment(options, "./CMakeCache.txt");
+    }
+
+    if (has_arg(argc, argv, "large-attachment")) {
+        sentry_options_set_enable_large_attachments(options, 1);
+        const char *large_file = ".sentry-large-attachment";
+        FILE *f = fopen(large_file, "wb");
+        if (f) {
+            // 100 MB = TUS upload threshold
+            char zeros[4096];
+            memset(zeros, 0, sizeof(zeros));
+            size_t remaining = 100 * 1024 * 1024;
+            while (remaining > 0) {
+                size_t chunk
+                    = remaining < sizeof(zeros) ? remaining : sizeof(zeros);
+                fwrite(zeros, 1, chunk, f);
+                remaining -= chunk;
+            }
+            fclose(f);
+            sentry_options_add_attachment(options, large_file);
+        }
     }
 
     if (has_arg(argc, argv, "stdout")) {
@@ -678,8 +704,8 @@ main(int argc, char **argv)
         sentry_options_set_logger_enabled_when_crashed(options, 1);
     }
 
-    if (has_arg(argc, argv, "enable-logs")) {
-        sentry_options_set_enable_logs(options, true);
+    if (has_arg(argc, argv, "disable-logs")) {
+        sentry_options_set_enable_logs(options, false);
     }
 
     if (has_arg(argc, argv, "crash-reporter")) {
@@ -694,9 +720,12 @@ main(int argc, char **argv)
     if (has_arg(argc, argv, "log-attributes")) {
         sentry_options_set_logs_with_attributes(options, true);
     }
+    if (has_arg(argc, argv, "require-user-consent")) {
+        sentry_options_set_require_user_consent(options, true);
+    }
     if (has_arg(argc, argv, "cache-keep")) {
         sentry_options_set_cache_keep(options, true);
-        sentry_options_set_cache_max_size(options, 4 * 1024 * 1024); // 4 MB
+        sentry_options_set_cache_max_size(options, 16 * 1024 * 1024); // 16 MB
         sentry_options_set_cache_max_age(options, 5 * 24 * 60 * 60); // 5 days
         sentry_options_set_cache_max_items(options, 5);
     }
@@ -756,6 +785,10 @@ main(int argc, char **argv)
 
     if (0 != sentry_init(options)) {
         return EXIT_FAILURE;
+    }
+
+    if (has_arg(argc, argv, "user-consent-revoke")) {
+        sentry_user_consent_revoke();
     }
 
     if (has_arg(argc, argv, "set-global-attribute")) {
@@ -892,9 +925,7 @@ main(int argc, char **argv)
             context, "name", sentry_value_new_string("testing-runtime"));
         sentry_set_context("runtime", context);
 
-        sentry_value_t user
-            = sentry_value_new_user("42", "some_name", NULL, NULL);
-        sentry_set_user(user);
+        sentry_set_user(sentry_value_new_user(NULL, "some_name", NULL, NULL));
 
         sentry_value_t default_crumb
             = sentry_value_new_breadcrumb(NULL, "default level is info");
@@ -1048,6 +1079,10 @@ main(int argc, char **argv)
             sentry_event_add_thread(event, thread);
         }
         sentry_capture_event(event);
+    }
+    if (has_arg(argc, argv, "user-consent-give")) {
+        sentry_user_consent_give();
+        sentry_flush(10000);
     }
     if (has_arg(argc, argv, "capture-exception")) {
         sentry_value_t exc = sentry_value_new_exception(

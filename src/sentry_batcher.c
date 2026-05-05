@@ -3,7 +3,6 @@
 #include "sentry_cpu_relax.h"
 #include "sentry_options.h"
 #include "sentry_utils.h"
-#include <string.h>
 
 // The batcher thread sleeps for this interval between flush cycles.
 // When the timer fires and there are items in the buffer, they are flushed
@@ -28,7 +27,6 @@ sentry__batcher_new(
     if (!batcher) {
         return NULL;
     }
-    memset(batcher, 0, sizeof(sentry_batcher_t));
     batcher->refcount = 1;
     batcher->batch_func = batch_func;
     batcher->data_category = data_category;
@@ -157,9 +155,9 @@ sentry__batcher_flush(sentry_batcher_t *batcher, bool crash_safe)
         while (!sentry__atomic_compare_swap(&batcher->flushing, 0, 1)) {
             const int max_attempts = 200;
             if (++attempts > max_attempts) {
-                SENTRY_WARN(
-                    "sentry__batcher_flush: timeout waiting for flushing "
-                    "lock in crash-safe mode");
+                SENTRY_SIGNAL_SAFE_LOG(
+                    "WARN sentry__batcher_flush: timeout waiting for "
+                    "flushing lock in crash-safe mode");
                 return false;
             }
 
@@ -226,9 +224,7 @@ sentry__batcher_flush(sentry_batcher_t *batcher, bool crash_safe)
                 // crash
                 sentry__run_write_envelope(batcher->run, envelope);
                 sentry_envelope_free(envelope);
-            } else if (!batcher->user_consent
-                || sentry__atomic_fetch(batcher->user_consent)
-                    == SENTRY_USER_CONSENT_GIVEN) {
+            } else if (!sentry__run_should_skip_upload(batcher->run)) {
                 // Normal operation: use transport for HTTP transmission
                 sentry__transport_send_envelope(batcher->transport, envelope);
             } else {
@@ -376,12 +372,10 @@ sentry__batcher_startup(
 {
     // dsn is incref'd because release() decref's it and may outlive options.
     batcher->dsn = sentry__dsn_incref(options->dsn);
-    // transport, run, and user_consent are non-owning refs, safe because they
+    // transport and run are non-owning refs, safe because they
     // are only accessed in flush() which is bound by the options lifetime.
     batcher->transport = options->transport;
     batcher->run = options->run;
-    batcher->user_consent
-        = options->require_user_consent ? (long *)&options->user_consent : NULL;
 
     // Mark thread as starting before actually spawning so thread can transition
     // to RUNNING. This prevents shutdown from thinking the thread was never

@@ -4,6 +4,7 @@
 #include "sentry_http_transport.h"
 #include "sentry_options.h"
 #include "sentry_string.h"
+#include "sentry_sync.h"
 #include "sentry_transport.h"
 #include "sentry_utils.h"
 
@@ -23,6 +24,7 @@ typedef struct {
     HINTERNET connect;
     HINTERNET request;
     bool debug;
+    long shutdown;
 } winhttp_client_t;
 
 static winhttp_client_t *
@@ -32,7 +34,6 @@ winhttp_client_new(void)
     if (!client) {
         return NULL;
     }
-    memset(client, 0, sizeof(winhttp_client_t));
 
     return client;
 }
@@ -144,6 +145,7 @@ static void
 winhttp_client_shutdown(void *_client)
 {
     winhttp_client_t *client = _client;
+    sentry__atomic_store(&client->shutdown, 1);
     // Seems like some requests are taking too long/hanging
     // Just close them to make sure the background thread is exiting.
     if (client->connect) {
@@ -205,9 +207,11 @@ winhttp_send_task(void *_client, sentry_prepared_http_request_t *req,
     }
 
     bool is_secure = strstr(req->url, "https") == req->url;
-    client->request = WinHttpOpenRequest(client->connect, L"POST",
+    wchar_t *method_w = sentry__string_to_wstr(req->method);
+    client->request = WinHttpOpenRequest(client->connect, method_w,
         url_components.lpszUrlPath, NULL, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, is_secure ? WINHTTP_FLAG_SECURE : 0);
+    sentry_free(method_w);
     if (!client->request) {
         SENTRY_WARNF(
             "`WinHttpOpenRequest` failed with code `%d`", GetLastError());
@@ -244,9 +248,67 @@ winhttp_send_task(void *_client, sentry_prepared_http_request_t *req,
             client->proxy_password, 0);
     }
 
-    if ((result = WinHttpSendRequest(client->request, headers, (DWORD)-1,
-             (LPVOID)req->body, (DWORD)req->body_len, (DWORD)req->body_len,
-             0))) {
+    if (req->body_path) {
+        HANDLE hFile = CreateFileW(req->body_path->path_w, GENERIC_READ,
+            FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            SENTRY_WARNF("failed to open request body file \"%s\"",
+                sentry__path_filename(req->body_path));
+            goto exit;
+        }
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpsendrequest#support-for-greater-than-4-gb-upload
+        DWORD total_length = req->body_len > (size_t)(DWORD)-1
+            ? WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH
+            : (DWORD)req->body_len;
+        result = WinHttpSendRequest(client->request, headers, (DWORD)-1,
+            WINHTTP_NO_REQUEST_DATA, 0, total_length, 0);
+        if (result) {
+            char chunk[65536];
+            DWORD bytes_read = 0;
+            while (true) {
+                if (!ReadFile(hFile, chunk, sizeof(chunk), &bytes_read, NULL)) {
+                    SENTRY_WARNF("failed to read request body file \"%s\" "
+                                 "with code `%d`",
+                        sentry__path_filename(req->body_path), GetLastError());
+                    result = false;
+                    break;
+                }
+                if (bytes_read == 0) {
+                    break;
+                }
+
+                DWORD bytes_written = 0;
+                if (!WinHttpWriteData(
+                        client->request, chunk, bytes_read, &bytes_written)) {
+                    SENTRY_WARNF("failed to upload request body file \"%s\" "
+                                 "with code `%d`",
+                        sentry__path_filename(req->body_path), GetLastError());
+                    result = false;
+                    break;
+                }
+                if (bytes_written != bytes_read) {
+                    SENTRY_WARNF("failed to upload request body file \"%s\"",
+                        sentry__path_filename(req->body_path));
+                    result = false;
+                    break;
+                }
+            }
+        } else {
+            SENTRY_WARNF(
+                "`WinHttpSendRequest` failed with code `%d`", GetLastError());
+        }
+        CloseHandle(hFile);
+    } else {
+        result = WinHttpSendRequest(client->request, headers, (DWORD)-1,
+            (LPVOID)req->body, (DWORD)req->body_len, (DWORD)req->body_len, 0);
+        if (!result) {
+            SENTRY_WARNF(
+                "`WinHttpSendRequest` failed with code `%d`", GetLastError());
+        }
+    }
+
+    if (result) {
         if (!(result = WinHttpReceiveResponse(client->request, NULL))) {
             SENTRY_WARNF("`WinHttpReceiveResponse` failed with code `%d`",
                 GetLastError());
@@ -301,15 +363,21 @@ winhttp_send_task(void *_client, sentry_prepared_http_request_t *req,
                        WINHTTP_NO_HEADER_INDEX)) {
             resp->retry_after = sentry__string_from_wstr(buf);
         }
-    } else {
-        SENTRY_WARNF(
-            "`WinHttpSendRequest` failed with code `%d`", GetLastError());
+
+        buf_size = sizeof(buf);
+        if (WinHttpQueryHeaders(client->request, WINHTTP_QUERY_CUSTOM,
+                L"location", buf, &buf_size, WINHTTP_NO_HEADER_INDEX)) {
+            resp->location = sentry__string_from_wstr(buf);
+        }
     }
 
     uint64_t now = sentry__monotonic_time();
     SENTRY_DEBUGF("request handled in %llums", now - started);
 
 exit:;
+    if (!result && sentry__atomic_fetch(&client->shutdown)) {
+        resp->shutdown = true;
+    }
     HINTERNET request = InterlockedExchangePointer(&client->request, NULL);
     if (request) {
         WinHttpCloseHandle(request);

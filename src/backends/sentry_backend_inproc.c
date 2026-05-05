@@ -33,31 +33,6 @@
 #include <string.h>
 
 /**
- * Signal/async-safe logging macro for use in signal handlers or other
- * contexts where stdio and malloc are unsafe. Only supports static strings.
- */
-#ifdef SENTRY_PLATFORM_UNIX
-#    include <unistd.h>
-#    define SENTRY_SIGNAL_SAFE_LOG(msg)                                        \
-        do {                                                                   \
-            static const char _msg[] = "[sentry] " msg "\n";                   \
-            (void)!write(STDERR_FILENO, _msg, sizeof(_msg) - 1);               \
-        } while (0)
-#elif defined(SENTRY_PLATFORM_WINDOWS)
-#    define SENTRY_SIGNAL_SAFE_LOG(msg)                                        \
-        do {                                                                   \
-            static const char _msg[] = "[sentry] " msg "\n";                   \
-            OutputDebugStringA(_msg);                                          \
-            HANDLE _stderr = GetStdHandle(STD_ERROR_HANDLE);                   \
-            if (_stderr && _stderr != INVALID_HANDLE_VALUE) {                  \
-                DWORD _written;                                                \
-                WriteFile(_stderr, _msg, (DWORD)(sizeof(_msg) - 1), &_written, \
-                    NULL);                                                     \
-            }                                                                  \
-        } while (0)
-#endif
-
-/**
  * Inproc Backend Introduction
  *
  * As the name suggests the inproc backend runs the crash handling entirely
@@ -1198,6 +1173,16 @@ process_ucontext_deferred(const sentry_ucontext_t *uctx,
         }
         TEST_CRASH_POINT("before_capture");
         if (should_handle) {
+            bool capture_screenshot = options->attach_screenshot;
+#ifdef SENTRY_PLATFORM_WINDOWS
+            if (capture_screenshot && options->before_screenshot_func) {
+                SENTRY_DEBUG("invoking `before_screenshot` hook");
+                capture_screenshot = options->before_screenshot_func(
+                                         event, options->before_screenshot_data)
+                    != 0;
+            }
+#endif
+
             sentry_envelope_t *envelope = sentry__prepare_event(options, event,
                 NULL, !options->on_crash_func && !skip_hooks, NULL);
             // TODO(tracing): Revisit when investigating transaction flushing
@@ -1207,7 +1192,7 @@ process_ucontext_deferred(const sentry_ucontext_t *uctx,
                 SENTRY_SESSION_STATUS_CRASHED);
             sentry__envelope_add_session(envelope, session);
 
-            if (options->attach_screenshot) {
+            if (capture_screenshot) {
                 sentry_attachment_t *screenshot = sentry__attachment_from_path(
                     sentry__screenshot_get_path(options));
                 if (screenshot
@@ -1221,7 +1206,7 @@ process_ucontext_deferred(const sentry_ucontext_t *uctx,
                 // capture the envelope with the disk transport
                 sentry_transport_t *disk_transport
                     = sentry_new_disk_transport(options->run);
-                sentry__capture_envelope(disk_transport, envelope);
+                sentry__capture_envelope(disk_transport, envelope, options);
                 sentry__transport_dump_queue(disk_transport, options->run);
                 sentry_transport_free(disk_transport);
             }
@@ -1814,7 +1799,6 @@ sentry__backend_new(void)
     if (!backend) {
         return NULL;
     }
-    memset(backend, 0, sizeof(sentry_backend_t));
 
     backend->startup_func = startup_inproc_backend;
     backend->shutdown_func = shutdown_inproc_backend;

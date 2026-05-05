@@ -68,12 +68,11 @@ get_client_sdk(void)
 static void
 init_scope(sentry_scope_t *scope)
 {
-    memset(scope, 0, sizeof(sentry_scope_t));
     scope->release = NULL;
     scope->environment = NULL;
     scope->transaction = NULL;
     scope->fingerprint = sentry_value_new_null();
-    scope->user = sentry_value_new_null();
+    scope->user = sentry_value_new_object();
     scope->tags = sentry_value_new_object();
     scope->extra = sentry_value_new_object();
     scope->attributes = sentry_value_new_object();
@@ -96,6 +95,7 @@ get_scope(void)
         return &g_scope;
     }
 
+    memset(&g_scope, 0, sizeof(sentry_scope_t));
     init_scope(&g_scope);
     sentry_value_set_by_key(g_scope.contexts, "os", sentry__get_os_context());
     g_scope.client_sdk = get_client_sdk();
@@ -354,7 +354,23 @@ sentry__scope_apply_to_event(const sentry_scope_t *scope,
         SET("level", sentry__value_new_level(scope->level));
     }
 
-    PLACE_VALUE("user", scope->user);
+    if (sentry_value_get_type(scope->user) == SENTRY_VALUE_TYPE_OBJECT) {
+        if (options->run && options->run->installation_id) {
+            // ensure event has a user object
+            if (IS_NULL("user")) {
+                SET("user", sentry__value_clone(scope->user));
+            }
+            // patch missing user ID with installation ID
+            sentry_value_t user = sentry_value_get_by_key(event, "user");
+            if (sentry_value_get_type(user) == SENTRY_VALUE_TYPE_OBJECT
+                && sentry_value_is_null(sentry_value_get_by_key(user, "id"))) {
+                sentry_value_set_by_key(user, "id",
+                    sentry_value_new_string(options->run->installation_id));
+            }
+        } else if (sentry_value_get_length(scope->user) > 0) {
+            PLACE_VALUE("user", scope->user);
+        }
+    }
     PLACE_VALUE("fingerprint", scope->fingerprint);
     PLACE_STRING("transaction", scope->transaction);
     PLACE_VALUE("sdk", scope->client_sdk);

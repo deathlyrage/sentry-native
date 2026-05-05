@@ -4,6 +4,7 @@ extern "C" {
 #include "sentry_alloc.h"
 #include "sentry_attachment.h"
 #include "sentry_backend.h"
+#include "sentry_client_report.h"
 #include "sentry_core.h"
 #include "sentry_database.h"
 #include "sentry_envelope.h"
@@ -84,7 +85,7 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
         }
     }
 
-    SENTRY_INFO("entering breakpad minidump callback");
+    SENTRY_SIGNAL_SAFE_LOG("INFO entering breakpad minidump callback");
 
     // this is a bit strange, according to docs, `succeeded` should be true when
     // a minidump file was successfully generated. however, when running our
@@ -147,7 +148,7 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
             uctx = &uctx_data;
 #endif
 
-            SENTRY_DEBUG("invoking `on_crash` hook");
+            SENTRY_SIGNAL_SAFE_LOG("DEBUG invoking `on_crash` hook");
             sentry_value_t result
                 = options->on_crash_func(uctx, event, options->on_crash_data);
             should_handle = !sentry_value_is_null(result);
@@ -162,6 +163,17 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
         }
 
         if (should_handle) {
+            bool capture_screenshot = options->attach_screenshot;
+#ifdef SENTRY_PLATFORM_WINDOWS
+            if (capture_screenshot && options->before_screenshot_func) {
+                SENTRY_SIGNAL_SAFE_LOG(
+                    "DEBUG invoking `before_screenshot` hook");
+                capture_screenshot = options->before_screenshot_func(
+                                         event, options->before_screenshot_data)
+                    != 0;
+            }
+#endif
+
             sentry_envelope_t *envelope = sentry__prepare_event(
                 options, event, nullptr, !options->on_crash_func, nullptr);
             sentry_session_t *session = sentry__end_current_session_with_status(
@@ -178,9 +190,26 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
 
                 sentry__envelope_item_set_header(item, "filename",
                     sentry_value_new_string(sentry__path_filename(dump_path)));
+            } else if (options->enable_large_attachments) {
+                sentry_attachment_t tmp = {};
+                tmp.path = dump_path;
+                tmp.type = MINIDUMP;
+                if (!sentry__cache_attachment_ref(
+                        envelope, &tmp, options->run->cache_path, nullptr)) {
+                    SENTRY_SIGNAL_SAFE_LOG(
+                        "WARN failed to cache minidump attachment-ref");
+                    sentry__client_report_discard(
+                        SENTRY_DISCARD_REASON_SEND_ERROR,
+                        SENTRY_DATA_CATEGORY_ATTACHMENT, 1);
+                }
+            } else {
+                SENTRY_SIGNAL_SAFE_LOG(
+                    "WARN failed to add minidump attachment");
+                sentry__client_report_discard(SENTRY_DISCARD_REASON_SEND_ERROR,
+                    SENTRY_DATA_CATEGORY_ATTACHMENT, 1);
             }
 
-            if (options->attach_screenshot) {
+            if (capture_screenshot) {
                 sentry_attachment_t *screenshot = sentry__attachment_from_path(
                     sentry__screenshot_get_path(options));
                 if (screenshot
@@ -194,7 +223,7 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
                 // capture the envelope with the disk transport
                 sentry_transport_t *disk_transport
                     = sentry_new_disk_transport(options->run);
-                sentry__capture_envelope(disk_transport, envelope);
+                sentry__capture_envelope(disk_transport, envelope, options);
                 sentry__transport_dump_queue(disk_transport, options->run);
                 sentry_transport_free(disk_transport);
             }
@@ -204,7 +233,8 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
             sentry__path_remove(dump_path);
             sentry__path_free(dump_path);
         } else {
-            SENTRY_DEBUG("event was discarded by the `on_crash` hook");
+            SENTRY_SIGNAL_SAFE_LOG(
+                "DEBUG event was discarded by the `on_crash` hook");
             sentry_value_decref(event);
         }
 
@@ -213,7 +243,7 @@ breakpad_backend_callback(const google_breakpad::MinidumpDescriptor &descriptor,
         sentry__transport_dump_queue(options->transport, options->run);
         // and restore the old transport
     }
-    SENTRY_INFO("crash has been captured");
+    SENTRY_SIGNAL_SAFE_LOG("INFO crash has been captured");
 
 #ifndef SENTRY_PLATFORM_WINDOWS
     sentry__leave_signal_handler();
@@ -335,7 +365,6 @@ sentry__backend_new(void)
     if (!backend) {
         return nullptr;
     }
-    memset(backend, 0, sizeof(sentry_backend_t));
 
     backend->startup_func = breakpad_backend_startup;
     backend->shutdown_func = breakpad_backend_shutdown;

@@ -393,3 +393,119 @@ SENTRY_TEST(path_basename)
     TEST_CHECK(!sentry__path_basename(path, ".tar.gz"));
     sentry__path_free(path);
 }
+
+SENTRY_TEST(path_unique)
+{
+    sentry_path_t *dir
+        = sentry__path_from_str(SENTRY_TEST_PATH_PREFIX ".unique-name");
+    TEST_ASSERT(!!dir);
+    sentry__path_remove_all(dir);
+    sentry__path_create_dir_all(dir);
+
+    // free name returns unchanged
+    sentry_path_t *path = sentry__path_unique(dir, "foo.txt");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), "foo.txt");
+    sentry__path_free(path);
+
+    // first collision bumps to -1 before the extension
+    sentry_path_t *taken = sentry__path_join_str(dir, "foo.txt");
+    sentry__path_write_buffer(taken, "x", 1);
+    sentry__path_free(taken);
+    path = sentry__path_unique(dir, "foo.txt");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), "foo-1.txt");
+    sentry__path_free(path);
+
+    // subsequent collisions skip taken suffixes in order
+    taken = sentry__path_join_str(dir, "foo-1.txt");
+    sentry__path_write_buffer(taken, "x", 1);
+    sentry__path_free(taken);
+    path = sentry__path_unique(dir, "foo.txt");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), "foo-2.txt");
+    sentry__path_free(path);
+
+    // filename without extension gets a trailing index
+    path = sentry__path_unique(dir, "bar");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), "bar");
+    sentry__path_free(path);
+    taken = sentry__path_join_str(dir, "bar");
+    sentry__path_write_buffer(taken, "x", 1);
+    sentry__path_free(taken);
+    path = sentry__path_unique(dir, "bar");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), "bar-1");
+    sentry__path_free(path);
+
+    // leading-dot filename is treated as stem-only, not as a bare extension
+    path = sentry__path_unique(dir, ".hidden");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), ".hidden");
+    sentry__path_free(path);
+    taken = sentry__path_join_str(dir, ".hidden");
+    sentry__path_write_buffer(taken, "x", 1);
+    sentry__path_free(taken);
+    path = sentry__path_unique(dir, ".hidden");
+    TEST_ASSERT(!!path);
+    TEST_CHECK_STRING_EQUAL(sentry__path_filename(path), ".hidden-1");
+    sentry__path_free(path);
+
+    // NULL / empty inputs are rejected
+    TEST_CHECK(!sentry__path_unique(NULL, "x"));
+    TEST_CHECK(!sentry__path_unique(dir, NULL));
+    TEST_CHECK(!sentry__path_unique(dir, ""));
+
+    sentry__path_remove_all(dir);
+    sentry__path_free(dir);
+}
+
+SENTRY_TEST(path_copy)
+{
+#if defined(SENTRY_PLATFORM_NX)
+    SKIP_TEST();
+#endif
+    sentry_path_t *src
+        = sentry__path_from_str(SENTRY_TEST_PATH_PREFIX ".copy-src");
+    TEST_ASSERT(!!src);
+    sentry_path_t *dst
+        = sentry__path_from_str(SENTRY_TEST_PATH_PREFIX ".copy-dst");
+    TEST_ASSERT(!!dst);
+
+    // cleanup
+    sentry__path_remove_all(src);
+    sentry__path_remove_all(dst);
+
+    // copy file with content preserved
+    sentry__path_write_buffer(src, "hello", 5);
+    TEST_CHECK(sentry__path_copy(src, dst) == 0);
+    TEST_CHECK(sentry__path_is_file(src));
+    TEST_CHECK(sentry__path_is_file(dst));
+    size_t len = 0;
+    char *buf = sentry__path_read_to_buffer(dst, &len);
+    TEST_ASSERT(!!buf);
+    TEST_CHECK(len == 5);
+    TEST_CHECK(memcmp(buf, "hello", 5) == 0);
+    sentry_free(buf);
+    sentry__path_remove(dst);
+
+    // overwrite existing dst
+    sentry__path_write_buffer(dst, "dst-data", 8);
+    TEST_CHECK(sentry__path_copy(src, dst) == 0);
+    TEST_CHECK(sentry__path_is_file(src));
+    buf = sentry__path_read_to_buffer(dst, &len);
+    TEST_ASSERT(!!buf);
+    TEST_CHECK(len == 5);
+    TEST_CHECK(memcmp(buf, "hello", 5) == 0);
+    sentry_free(buf);
+    sentry__path_remove(dst);
+
+    // copy nonexistent src
+    sentry__path_remove(src);
+    TEST_CHECK(sentry__path_copy(src, dst) != 0);
+
+    sentry__path_remove_all(dst);
+    sentry__path_free(dst);
+    sentry__path_free(src);
+}

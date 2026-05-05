@@ -22,7 +22,7 @@ def adb(*args, **kwargs):
 # https://docs.pytest.org/en/latest/assert.html#assert-details
 pytest.register_assert_rewrite("tests.assertions")
 
-SENTRY_VERSION = "0.13.6"
+SENTRY_VERSION = "0.14.0"
 
 
 def make_dsn(httpserver, auth="uiaeosnrtdy", id=123456, proxy_host=False):
@@ -350,16 +350,21 @@ class Item(object):
         headers = json.loads(line)
         length = headers["length"]
         payload = f.read(length)
-        if headers.get("type") in [
-            "event",
-            "feedback",
-            "session",
-            "transaction",
-            "user_report",
-            "log",
-            "trace_metric",
-            "client_report",
-        ]:
+        if (
+            headers.get("type")
+            in [
+                "event",
+                "feedback",
+                "session",
+                "transaction",
+                "user_report",
+                "log",
+                "trace_metric",
+                "client_report",
+            ]
+            or headers.get("content_type")
+            == "application/vnd.sentry.attachment-ref+json"
+        ):
             rv = cls(headers=headers, payload=PayloadRef(json=json.loads(payload)))
         else:
             rv = cls(headers=headers, payload=payload)

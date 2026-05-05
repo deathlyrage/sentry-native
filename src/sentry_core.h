@@ -34,6 +34,10 @@
 /**
  * This function will check the user consent, and return `true` if uploads
  * should *not* be sent to the sentry server, and be discarded instead.
+ *
+ * Note: This function acquires the options lock internally. Use
+ * `sentry__run_should_skip_upload` from worker threads that may run while
+ * the options are locked during SDK shutdown.
  */
 bool sentry__should_skip_upload(void);
 
@@ -89,8 +93,8 @@ sentry_envelope_t *sentry__prepare_transaction(const sentry_options_t *options,
  * This function will submit the `envelope` to the given `transport`, first
  * checking for consent.
  */
-void sentry__capture_envelope(
-    sentry_transport_t *transport, sentry_envelope_t *envelope);
+void sentry__capture_envelope(sentry_transport_t *transport,
+    sentry_envelope_t *envelope, const sentry_options_t *options);
 
 /**
  * Generates a new random UUID for events.

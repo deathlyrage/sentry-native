@@ -71,35 +71,12 @@ sentry__options_unlock(void)
     sentry__mutex_unlock(&g_options_lock);
 }
 
-static void
-load_user_consent(sentry_options_t *opts)
-{
-    sentry_path_t *consent_path
-        = sentry__path_join_str(opts->database_path, "user-consent");
-    char *contents = sentry__path_read_to_buffer(consent_path, NULL);
-    sentry__path_free(consent_path);
-    switch (contents ? contents[0] : 0) {
-    case '1':
-        opts->user_consent = SENTRY_USER_CONSENT_GIVEN;
-        break;
-    case '0':
-        opts->user_consent = SENTRY_USER_CONSENT_REVOKED;
-        break;
-    default:
-        opts->user_consent = SENTRY_USER_CONSENT_UNKNOWN;
-        break;
-    }
-    sentry_free(contents);
-}
-
 bool
 sentry__should_skip_upload(void)
 {
     bool skip = true;
     SENTRY_WITH_OPTIONS (options) {
-        skip = options->require_user_consent
-            && sentry__atomic_fetch((long *)&options->user_consent)
-                != SENTRY_USER_CONSENT_GIVEN;
+        skip = sentry__run_should_skip_upload(options->run);
     }
     return skip;
 }
@@ -207,14 +184,18 @@ sentry_init(sentry_options_t *options)
         SENTRY_WARN("failed to initialize run directory");
         goto fail;
     }
+    options->run->require_user_consent = options->require_user_consent;
 
-    load_user_consent(options);
+    sentry__run_load_user_consent(options->run, options->database_path);
 
     if (!options->dsn || !options->dsn->is_valid) {
         const char *raw_dsn = sentry_options_get_dsn(options);
         SENTRY_WARNF(
             "the provided DSN \"%s\" is not valid", raw_dsn ? raw_dsn : "");
     }
+
+    sentry__run_load_installation_id(options->run, options->database_path,
+        options->dsn ? options->dsn->public_key : NULL);
 
     if (transport) {
         if (sentry__transport_startup(transport, options) != 0) {
@@ -389,10 +370,9 @@ sentry_close(void)
             dumped_envelopes = sentry__transport_dump_queue(
                 options->transport, options->run);
         }
-        if (!dumped_envelopes
-            && (!options->backend
+        if ((!options->backend
                 || !options->backend->can_capture_after_shutdown)) {
-            sentry__run_clean(options->run);
+            sentry__run_clean(options->run, false);
         }
         sentry_options_free(options);
     } else {
@@ -437,7 +417,7 @@ static void
 set_user_consent(sentry_user_consent_t new_val)
 {
     SENTRY_WITH_OPTIONS (options) {
-        if (sentry__atomic_store((long *)&options->user_consent, new_val)
+        if (sentry__atomic_store(&options->run->user_consent, new_val)
             != new_val) {
             if (options->backend
                 && options->backend->user_consent_changed_func) {
@@ -449,6 +429,8 @@ set_user_consent(sentry_user_consent_t new_val)
             switch (new_val) {
             case SENTRY_USER_CONSENT_GIVEN:
                 sentry__path_write_buffer(consent_path, "1\n", 2);
+                // flush any envelopes cached while consent was revoked
+                sentry_transport_retry(options->transport);
                 break;
             case SENTRY_USER_CONSENT_REVOKED:
                 sentry__path_write_buffer(consent_path, "0\n", 2);
@@ -486,7 +468,7 @@ sentry_user_consent_get(void)
     sentry_user_consent_t rv = SENTRY_USER_CONSENT_UNKNOWN;
     SENTRY_WITH_OPTIONS (options) {
         rv = (sentry_user_consent_t)(int)sentry__atomic_fetch(
-            (long *)&options->user_consent);
+            &options->run->user_consent);
     }
     return rv;
 }
@@ -502,16 +484,25 @@ sentry_user_consent_is_required(void)
 }
 
 void
-sentry__capture_envelope(
-    sentry_transport_t *transport, sentry_envelope_t *envelope)
+sentry__capture_envelope(sentry_transport_t *transport,
+    sentry_envelope_t *envelope, const sentry_options_t *options)
 {
-    bool has_consent = !sentry__should_skip_upload();
-    if (!has_consent) {
-        SENTRY_INFO("discarding envelope due to missing user consent");
-        sentry_envelope_free(envelope);
+    if (!sentry__run_should_skip_upload(options->run)) {
+        sentry__transport_send_envelope(transport, envelope);
         return;
     }
-    sentry__transport_send_envelope(transport, envelope);
+    bool cached = false;
+    if (options->cache_keep || options->http_retry) {
+        cached = sentry__run_write_cache(options->run, envelope, 0);
+        if (cached && !sentry__run_should_skip_upload(options->run)) {
+            // consent given meanwhile -> trigger retry to avoid waiting
+            // until the next retry poll
+            sentry_transport_retry(options->transport);
+        }
+    }
+    SENTRY_INFO(cached ? "caching envelope due to missing user consent"
+                       : "discarding envelope due to missing user consent");
+    sentry_envelope_free(envelope);
 }
 
 void
@@ -521,7 +512,7 @@ sentry_capture_envelope(sentry_envelope_t *envelope)
         return;
     }
     SENTRY_WITH_OPTIONS (options) {
-        sentry__capture_envelope(options->transport, envelope);
+        sentry__capture_envelope(options->transport, envelope, options);
     }
 }
 
@@ -630,7 +621,7 @@ sentry__capture_event(sentry_value_t event, sentry_scope_t *local_scope)
                     SENTRY_DATA_CATEGORY_ERROR, 1);
                 sentry_envelope_free(envelope);
             } else {
-                sentry__capture_envelope(options->transport, envelope);
+                sentry__capture_envelope(options->transport, envelope, options);
                 was_sent = true;
             }
         }
@@ -736,10 +727,17 @@ sentry__prepare_event(const sentry_options_t *options, sentry_value_t event,
     SENTRY_WITH_SCOPE (scope) {
         if (all_attachments) {
             // all attachments merged from multiple scopes
-            sentry__envelope_add_attachments(envelope, all_attachments);
+            sentry__envelope_add_attachments(
+                envelope, all_attachments, options);
         } else {
             // only global scope has attachments
-            sentry__envelope_add_attachments(envelope, scope->attachments);
+            sentry__envelope_add_attachments(
+                envelope, scope->attachments, options);
+        }
+        if (options->run) {
+            sentry__cache_attachment_refs(envelope,
+                all_attachments ? all_attachments : scope->attachments, options,
+                options->run->cache_path, options->run->run_path);
         }
     }
 
@@ -816,7 +814,8 @@ fail:
 }
 
 static sentry_envelope_t *
-prepare_user_feedback(sentry_value_t user_feedback, sentry_hint_t *hint)
+prepare_user_feedback(const sentry_options_t *options,
+    sentry_value_t user_feedback, sentry_hint_t *hint)
 {
     sentry_envelope_t *envelope = NULL;
 
@@ -827,7 +826,11 @@ prepare_user_feedback(sentry_value_t user_feedback, sentry_hint_t *hint)
     }
 
     if (hint && hint->attachments) {
-        sentry__envelope_add_attachments(envelope, hint->attachments);
+        sentry__envelope_add_attachments(envelope, hint->attachments, options);
+        if (options->run) {
+            sentry__cache_attachment_refs(envelope, hint->attachments, options,
+                options->run->cache_path, options->run->run_path);
+        }
     }
 
     return envelope;
@@ -881,7 +884,8 @@ sentry_set_user(sentry_value_t user)
     if (!sentry_value_is_null(user)) {
         sentry_options_t *options = sentry__options_lock();
         if (options && options->session) {
-            sentry__session_sync_user(options->session, user);
+            sentry__session_sync_user(options->session, user,
+                options->run ? options->run->installation_id : NULL);
             sentry__run_write_session(options->run, options->session);
         }
         sentry__options_unlock();
@@ -1639,7 +1643,7 @@ sentry_capture_user_feedback(sentry_value_t user_report)
     SENTRY_WITH_OPTIONS (options) {
         envelope = prepare_user_report(user_report);
         if (envelope) {
-            sentry__capture_envelope(options->transport, envelope);
+            sentry__capture_envelope(options->transport, envelope, options);
         }
     }
     sentry_value_decref(user_report);
@@ -1659,9 +1663,9 @@ sentry_capture_feedback_with_hint(
     sentry_envelope_t *envelope = NULL;
 
     SENTRY_WITH_OPTIONS (options) {
-        envelope = prepare_user_feedback(user_feedback, hint);
+        envelope = prepare_user_feedback(options, user_feedback, hint);
         if (envelope) {
-            sentry__capture_envelope(options->transport, envelope);
+            sentry__capture_envelope(options->transport, envelope, options);
         }
     }
 
@@ -1758,8 +1762,33 @@ sentry_capture_minidump_n(const char *path, size_t path_len)
             = sentry__prepare_event(options, event, &event_id, true, NULL);
 
         if (!envelope || sentry_uuid_is_nil(&event_id)) {
-            sentry_value_decref(event);
+            sentry_envelope_free(envelope);
         } else {
+            if (options->enable_large_attachments && options->run
+                && sentry__path_get_size(dump_path)
+                    >= SENTRY_LARGE_ATTACHMENT_SIZE) {
+                sentry_attachment_t tmp = { 0 };
+                tmp.path = dump_path;
+                tmp.type = MINIDUMP;
+                if (!sentry__cache_attachment_ref(
+                        envelope, &tmp, options->run->cache_path, NULL)) {
+                    SENTRY_WARN("failed to cache minidump attachment-ref");
+                    sentry__client_report_discard(
+                        SENTRY_DISCARD_REASON_SEND_ERROR,
+                        SENTRY_DATA_CATEGORY_ATTACHMENT, 1);
+                    sentry_envelope_free(envelope);
+                    sentry__path_free(dump_path);
+                    sentry_options_free((sentry_options_t *)options);
+                    return sentry_uuid_nil();
+                }
+                sentry__capture_envelope(options->transport, envelope, options);
+                SENTRY_INFOF(
+                    "Minidump has been captured: \"%s\"", dump_path->path);
+                sentry__path_free(dump_path);
+                sentry_options_free((sentry_options_t *)options);
+                return event_id;
+            }
+
             // the minidump is added as an attachment, with the type
             // `event.minidump`
             sentry_envelope_item_t *item = sentry__envelope_add_from_path(
@@ -1774,7 +1803,7 @@ sentry_capture_minidump_n(const char *path, size_t path_len)
                 sentry__envelope_item_set_header(item, "filename",
                     sentry_value_new_string(sentry__path_filename(dump_path)));
 
-                sentry__capture_envelope(options->transport, envelope);
+                sentry__capture_envelope(options->transport, envelope, options);
 
                 SENTRY_INFOF(
                     "Minidump has been captured: \"%s\"", dump_path->path);
